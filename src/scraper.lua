@@ -3,7 +3,7 @@ local Api = require('zlibrary.api')
 
 -- Cache configuration
 local CACHE_FILE = "annas_domains_cache.txt"
-local CACHE_DURATION = 2 * 24 * 60 * 60  -- 2 days in seconds
+local CACHE_DURATION = 12 * 60 * 60  -- 12 hours in seconds
 
 -- Reads domains from cache
 local function read_cache()
@@ -134,10 +134,11 @@ local function get_annas_archive_domains()
     -- Fallback: default domains if Wikipedia fails
     print("=== Warning: Using fallback domains")
     return {
+        "annas-archive.li",
+        "annas-archive.gl",
         "annas-archive.org",
         "annas-archive.se",
         "annas-archive.gs",
-        "annas-archive.li",
         "annas-archive.pm",
         "annas-archive.in",
     }
@@ -616,10 +617,13 @@ end
 function download_book(book, path)
     -- Try different Library Genesis mirrors
     local lgli_exts = {
-        [1] = ".li/",
-        [2] = ".is/",
-        [3] = ".rs/",
-        [4] = ".st/",
+        ".la/",
+        ".gl/",
+        ".li/",
+        ".is/",
+        ".rs/",
+        ".st/",
+        ".bz/",
     }
 
     for _, lgli_ext in ipairs(lgli_exts) do
