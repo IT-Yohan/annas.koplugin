@@ -18,7 +18,6 @@ local logger = require("logger")
 local Ota = require("annas.ota")
 local Cache = require("annas.cache")
 local Device = require("device")
-local MultiSearchDialog = require("annas.multisearch_dialog")
 local DialogManager = require("annas.dialog_manager")
 
 require('src.scraper')
@@ -42,7 +41,7 @@ function Annas:init()
     self.plugin_path, _ = util.splitFilePathName(full_source_path):gsub("/+", "/")
 
     Config.migrateLegacySettings()
-    Config.loadCredentialsFromFile(self.plugin_path)
+    Config.cleanupObsoleteSettings()
     
     local current_version = Ota.getCurrentPluginVersion(self.plugin_path)
     
@@ -66,7 +65,7 @@ function Annas:onAnnasSearch()
       local doc_props = self.ui.doc_settings.data.doc_props
       def_search_input = doc_props.authors or doc_props.title
     end
-    self:showMultiSearchDialog(nil, def_search_input)
+    Ui.showSearchDialog(self, def_search_input)
     return true
 end
 
@@ -79,407 +78,8 @@ function Annas:addToMainMenu(menu_items)
             callback = function()
                 Ui.showSearchDialog(self)
             end,
-            --[[ sub_item_table = {
-                text = T("Search"),
-                {
-                    text = T("Settings"),
-                    keep_menu_open = true,
-                    separator = true,
-                    sub_item_table = {
-                        {
-                            text = T("Set base URL"),
-                            keep_menu_open = true,
-                            callback = function()
-                                Ui.showGenericInputDialog(
-                                    T("Set base URL"),
-                                    Config.SETTINGS_BASE_URL_KEY,
-                                    Config.getBaseUrl(),
-                                    false,
-                                    function(input_value)
-                                        local success, err_msg = Config.setAndValidateBaseUrl(input_value)
-                                        if not success then
-                                            Ui.showErrorMessage(err_msg or T("Invalid Base URL."))
-                                            return false
-                                        end
-                                        return true
-                                    end
-                                )
-                            end,
-                            separator = true,
-                        },
-                        {
-                            text = T("Set download directory"),
-                            keep_menu_open = true,
-                            callback = function()
-                                Ui.showDownloadDirectoryDialog()
-                            end,
-                        },
-                        {
-                            text = T("Search options"),
-                            keep_menu_open = true,
-                            separator = true,
-                            sub_item_table = {{
-                                text = T("Select search languages"),
-                                keep_menu_open = true,
-                                callback = function()
-                                    Ui.showLanguageSelectionDialog(self.ui)
-                                end
-                            }, {
-                                text = T("Select search formats"),
-                                keep_menu_open = true,
-                                callback = function()
-                                    Ui.showExtensionSelectionDialog(self.ui)
-                                end
-                            }, {
-                                text = T("Select search order"),
-                                keep_menu_open = true,
-                                callback = function()
-                                    Ui.showOrdersSelectionDialog(self.ui)
-                                end
-                            }}
-                        },
-                        {
-                            text = T("Timeout settings"),
-                            keep_menu_open = true,
-                            separator = true,
-                            callback = function()
-                                Ui.showAllTimeoutConfigDialog(self.ui)
-                            end,
-                        },
-                        {
-                            text = T("Check for updates"),
-                            keep_menu_open = false,
-                            separator = true,
-                            callback = function()
-                                if self.plugin_path then
-                                    Ota.startUpdateProcess(self.plugin_path)
-                                else
-                                    logger.err("Annas: Plugin path not available for OTA update.")
-                                    Ui.showErrorMessage(T("Error: Plugin path not found. Cannot check for updates."))
-                                end
-                            end,
-                        },
-                        {
-                            text = T("Developer options"),
-                            keep_menu_open = true,
-                            separator = true,
-                            sub_item_table_func = function()
-                                return {
-                                    {
-                                        text = T("Test mode"),
-                                        keep_menu_open = true,
-                                        checked_func = function()
-                                            return Config.isTestModeEnabled()
-                                        end,
-                                        callback = function()
-                                            local is_enabled = Config.isTestModeEnabled()
-                                            if is_enabled then
-                                                Config.setTestMode(false)
-                                                Ui.showInfoMessage(T("Test mode disabled. Normal download behavior restored."))
-                                            else
-                                                Config.setTestMode(true)
-                                                Ui.showInfoMessage(T("Test mode enabled. Downloads will always succeed."))
-                                            end
-                                        end,
-                                    },
-                                }
-                            end
-                        },
-                    }
-                },
-                {
-                    text = T("Search"),
-                    callback = function()
-                        Ui.showSearchDialog(self)
-                    end,
-                },
-                {
-                    text = T("Recommended"),
-                    callback = function()
-                        local search_tab_recommended = 1
-                        self:showMultiSearchDialog(search_tab_recommended)
-                    end,
-                },
-                {
-                    text = T("Most popular"),
-                    callback = function()
-                        local search_tab_most_popular = 2
-                        self:showMultiSearchDialog(search_tab_most_popular)
-                    end,
-                },
-            } ]]
         }
     end
-end
-
-function Annas:_fetchBookList(options)
-    if not NetworkMgr:isOnline() then
-        Ui.showErrorMessage(T("No internet connection detected."))
-        return
-    end
-
-    local function attemptFetch(retry_on_auth_error)
-        retry_on_auth_error = retry_on_auth_error == nil and true or retry_on_auth_error
-        
-        local user_session = Config.getUserSession()
-        local loading_msg = Ui.showLoadingMessage(options.loading_text_key)
-
-        local task = function()
-            return options.api_method(user_session and user_session.user_id, user_session and user_session.user_key)
-        end
-
-        local on_success = function(api_result)
-            if api_result.error then
-                if retry_on_auth_error and Api.isAuthenticationError(api_result.error) and options.requires_auth then
-                    Ui.closeMessage(loading_msg)
-                    self:login(function(login_ok)
-                        if login_ok then
-                            attemptFetch(false)
-                        end
-                    end)
-                    return
-                end
-                
-                Ui.closeMessage(loading_msg)
-                Ui.showErrorMessage(Ui.colonConcat(options.error_prefix_key, tostring(api_result.error)))
-                return
-            end
-
-            if not api_result.books or #api_result.books == 0 then
-                Ui.closeMessage(loading_msg)
-                if options.no_items_text_key then
-                    Ui.showInfoMessage(options.no_items_text_key)
-                else
-                    Ui.showInfoMessage(T("No books found, please try again"))
-                end
-                return
-            end
-
-            Ui.closeMessage(loading_msg)
-            logger.info(string.format("Annas:%s - Fetch successful. Results: %d", options.log_context, #api_result.books))
-            self[options.results_member_name] = api_result.books
-
-            UIManager:nextTick(function()
-                options.display_menu_func(self.ui, self[options.results_member_name], self)
-            end)
-        end
-
-        local on_error_handler = function(err_msg)
-            if retry_on_auth_error and Api.isAuthenticationError(err_msg) and options.requires_auth then
-                Ui.closeMessage(loading_msg)
-                self:login(function(login_ok)
-                    if login_ok then
-                        attemptFetch(false)
-                    end
-                end)
-                return
-            end
-            
-            -- Use retry dialog for timeout and network errors
-            Ui.showRetryErrorDialog(err_msg, options.operation_name or T("Operation"), function()
-                -- Retry callback
-                attemptFetch(false)
-            end, function(final_err_msg)
-                -- Cancel callback - user already knows about the error
-            end, loading_msg)
-        end
-
-        AsyncHelper.run(task, on_success, on_error_handler, loading_msg)
-    end
-
-    attemptFetch()
-end
-
-function Annas:showMultiSearchDialog(def_position, def_search_input)
-    local search_dialog
-    local ShowBooksMultiSearch = function(ui_self, books, plugin_self)
-        search_dialog:refreshMenuItems(books)
-    end
-    search_dialog = MultiSearchDialog:new{
-        title = T("Anna's Archive search"),
-        def_position = def_position,
-        def_search_input = def_search_input,
-        on_select_book_callback = function(book)
-            self:onSelectRecommendedBook(book)
-        end,
-        on_search_callback = function(def_input)
-            Ui.showSearchDialog(self, def_input)
-        end,
-        toggle_items = {{
-            text = T("Recommended"),
-            cache_key = "recommended",
-            callback = function(widget)
-                self:_fetchBookList({
-                    api_method = Api.getRecommendedBooks,
-                    loading_text_key = T("Fetching recommended books..."),
-                    error_prefix_key = T("Failed to fetch recommended books"),
-                    operation_name = T("Recommended books"),
-                    log_context = "onShowRecommendedBooks",
-                    results_member_name = "current_recommended_books",
-                    display_menu_func = ShowBooksMultiSearch,
-                    requires_auth = true
-                })
-            end},{
-            text = T("Most popular"),
-            cache_key = "popular",
-            callback = function(widget)
-                self:_fetchBookList({
-                    api_method = Api.getMostPopularBooks,
-                    loading_text_key = T("Fetching most popular books..."),
-                    error_prefix_key = T("Failed to fetch most popular books"),
-                    operation_name = T("Most popular books"),
-                    log_context = "onShowMostPopularBooks",
-                    results_member_name = "current_most_popular_books",
-                    display_menu_func = ShowBooksMultiSearch,
-                    requires_auth = false
-                })
-            end}
-        }
-    }
-
-    self.dialog_manager:trackDialog(search_dialog)
-    search_dialog:fetchAndShow()
-end
-
-function Annas:onShowRecommendedBooks()
-    self:_fetchBookList({
-        api_method = Api.getRecommendedBooks,
-        loading_text_key = T("Fetching recommended books..."),
-        error_prefix_key = T("Failed to fetch recommended books"),
-        operation_name = T("Recommended books"),
-        log_context = "onShowRecommendedBooks",
-        results_member_name = "current_recommended_books",
-        display_menu_func = Ui.showRecommendedBooksMenu,
-        requires_auth = true
-    })
-end
-
-function Annas:onShowMostPopularBooks()
-    self:_fetchBookList({
-        api_method = Api.getMostPopularBooks,
-        loading_text_key = T("Fetching most popular books..."),
-        error_prefix_key = T("Failed to fetch most popular books"),
-        operation_name = T("Most popular books"),
-        log_context = "onShowMostPopularBooks",
-        results_member_name = "current_most_popular_books",
-        display_menu_func = Ui.showMostPopularBooksMenu,
-        requires_auth = false
-    })
-end
-
-function Annas:onSelectRecommendedBook(book_stub)
-    if not NetworkMgr:isOnline() then
-        Ui.showErrorMessage(T("No internet connection detected."))
-        return
-    end
-
-    if not (book_stub.id and book_stub.hash) then
-        logger.warn("Annas.onSelectRecommendedBook - parameter error")
-        return
-    end
-
-    local book_cache = Cache:new{
-            name = string.format("%s_%s", book_stub.id, book_stub.hash)
-    }
-    local book_details_cache = book_cache:get("details")
-
-    if type(book_details_cache) == "table" and book_details_cache.title then
-        Ui.showBookDetails(self, book_details_cache, function()
-                book_cache:clear()
-                self:onSelectRecommendedBook(book_stub)
-        end)
-        return
-    end
-
-    local function attemptBookDetails()
-        local user_session = Config.getUserSession()
-        local loading_msg = Ui.showLoadingMessage(T("Fetching book details..."))
-
-        local task = function()
-            return Api.getBookDetails(user_session and user_session.user_id, user_session and user_session.user_key, book_stub.id, book_stub.hash)
-        end
-
-        local on_success = function(api_result)
-            if api_result.error then
-                Ui.closeMessage(loading_msg)
-                Ui.showErrorMessage(Ui.colonConcat(T("Failed to fetch book details"), tostring(api_result.error)))
-                return
-            end
-
-            if not api_result.book then
-                Ui.closeMessage(loading_msg)
-                Ui.showErrorMessage(T("Could not retrieve book details."))
-                return
-            end
-
-            Ui.closeMessage(loading_msg)
-            logger.info(string.format("Annas:onSelectRecommendedBook - Fetch successful for book ID: %s", api_result.book.id))
-
-            Ui.showBookDetails(self, api_result.book)
-
-            book_cache:insert("details", api_result.book)
-        end
-
-        local function on_error_handler(err_msg)
-            -- Use retry dialog for timeout and network errors
-            Ui.showRetryErrorDialog(err_msg, T("Book details"), function()
-                -- Retry callback
-                attemptBookDetails()
-            end, function(final_err_msg)
-                -- Cancel callback - user already knows about the error
-            end, loading_msg)
-        end
-
-        AsyncHelper.run(task, on_success, on_error_handler, loading_msg)
-    end
-
-    attemptBookDetails()
-end
-
-function Annas:login(callback)
-    if not NetworkMgr:isOnline() then
-        Ui.showErrorMessage(T("No internet connection detected."))
-        if callback then callback(false) end
-        return
-    end
-
-    local email = Config.getSetting(Config.SETTINGS_USERNAME_KEY)
-    local password = Config.getSetting(Config.SETTINGS_PASSWORD_KEY)
-
-    if not email or email == "" or not password or password == "" then
-        Ui.showErrorMessage(T("Please set both username and password first."))
-        if callback then callback(false) end
-        return
-    end
-
-    local loading_msg = Ui.showLoadingMessage(T("Logging in..."))
-
-    local task = function()
-        return Api.login(email, password)
-    end
-
-    local on_success = function(result)
-        Ui.closeMessage(loading_msg)
-
-        if result.error then
-            Ui.showErrorMessage(result.error)
-            if callback then callback(false) end
-            return
-        end
-
-        Config.saveUserSession(result.user_id, result.user_key)
-        if callback then callback(true) end
-    end
-
-    local on_error_handler = function(err_msg)
-        Ui.showRetryErrorDialog(err_msg, T("Login"), function()
-            self:login(callback)
-        end, function(final_err_msg)
-            if callback then callback(false) end
-        end, loading_msg)
-    end
-
-    AsyncHelper.run(task, on_success, on_error_handler, loading_msg)
 end
 
 function Annas:performSearch(query)
@@ -488,8 +88,7 @@ function Annas:performSearch(query)
         return
     end
 
-    local function attemptSearch(retry_on_auth_error)
-
+    local function attemptSearch()
         local res = scraper(query)
 
         local loading_msg = Ui.showLoadingMessage(T("Searching for \"") .. query .. "\"...")
@@ -503,15 +102,11 @@ function Annas:performSearch(query)
         Ui.closeMessage(loading_msg)
         logger.info(string.format("Annas:performSearch - Fetch successful. Results: %d", #res))
         self.current_search_query = query
-        --self.current_search_api_page_loaded = current_page_to_search
         self.all_search_results_data = res
-        --self.has_more_api_results = true
 
         UIManager:nextTick(function()
             self:displaySearchResults(self.all_search_results_data, self.current_search_query)
         end)
-
-        AsyncHelper.run(task, loading_msg)
     end
 
     attemptSearch()
@@ -540,81 +135,7 @@ function Annas:displaySearchResults(initial_book_data_list, query_string)
         menu_instance.prev_focused_path = nil
         menu_instance.page = new_page_number
 
-        local is_last_page_of_current_items = (new_page_number == menu_instance.page_num)
-
-        if is_last_page_of_current_items and self.has_more_api_results then
-            logger.info(string.format("Annas: Reached page %d (last page of current items). Attempting to load more from API.", new_page_number))
-
-            local next_api_page_to_fetch = self.current_search_api_page_loaded + 1
-            local loading_msg_more = Ui.showLoadingMessage(string.format(T("Loading more results (Page %s)..."), next_api_page_to_fetch))
-
-            local user_session_more = Config.getUserSession()
-            local selected_languages_more = Config.getSearchLanguages()
-            local selected_extensions_more = Config.getSearchExtensions()
-            local selected_order_more = Config.getSearchOrder()
-
-            local task_load_more = function()
-                return Api.search(self.current_search_query, user_session_more.user_id, user_session_more.user_key, selected_languages_more, selected_extensions_more, selected_order_more, next_api_page_to_fetch)
-            end
-
-            local on_success_load_more
-            local on_error_load_more
-
-            on_success_load_more = function(api_result_more)
-                Ui.closeMessage(loading_msg_more)
-                if api_result_more.error then
-                    if Api.isAuthenticationError(api_result_more.error) then
-                        self:login(function(login_ok)
-                            if login_ok then
-                                on_goto_page_handler(menu_instance, new_page_number)
-                            end
-                        end)
-                        return
-                    end
-                    Ui.showErrorMessage(Ui.colonConcat(T("Failed to load more results"), tostring(api_result_more.error)))
-                    return
-                end
-
-                local new_book_objects = api_result_more.results
-                if new_book_objects and #new_book_objects > 0 then
-                    logger.info(string.format("Annas: Adding %d new book objects from API.", #new_book_objects))
-                    self.current_search_api_page_loaded = next_api_page_to_fetch
-
-                    local new_menu_items_to_add = {}
-                    for _, book_api_data_transformed in ipairs(new_book_objects) do
-                        table.insert(self.all_search_results_data, book_api_data_transformed)
-                        table.insert(new_menu_items_to_add, Ui.createBookMenuItem(book_api_data_transformed, self))
-                    end
-                    Ui.appendSearchResultsToMenu(menu_instance, new_menu_items_to_add)
-                else
-                    logger.info("Annas: No more results from API or API returned empty.")
-                    self.has_more_api_results = false
-                    Ui.showInfoMessage(T("No more results found."))
-                    menu_instance:updateItems(1, true)
-                end
-            end
-
-            on_error_load_more = function(err_msg_more)
-                Ui.closeMessage(loading_msg_more)
-                if Api.isAuthenticationError(err_msg_more) then
-                    self:login(function(login_ok)
-                        if login_ok then
-                            on_goto_page_handler(menu_instance, new_page_number)
-                        end
-                    end)
-                    return
-                end
-                
-                Ui.showErrorMessage(Ui.colonConcat(T("Failed to load more results"), tostring(err_msg_more)))
-            end
-
-            AsyncHelper.run(task_load_more, on_success_load_more, on_error_load_more, loading_msg_more)
-        else
-            if is_last_page_of_current_items and not self.has_more_api_results then
-                logger.info("Annas: Reached last page, and no more API results to load.")
-            end
-            menu_instance:updateItems(1, true)
-        end
+        menu_instance:updateItems(1, true)
         return true
     end
 
@@ -661,31 +182,14 @@ function Annas:downloadBook(book)
     --local target_filepath = target_dir .. "/" .. filename
     --logger.info(string.format("Annas:downloadBook - Target filepath: %s", target_filepath))
 
-    local function attemptDownload(retry_on_auth_error)
-        retry_on_auth_error = retry_on_auth_error == nil and true or retry_on_auth_error
-        
-        local user_session = Config.getUserSession()
-        local referer_url = book.href and Config.getBookUrl(book.href) or nil
-
+    local function attemptDownload()
         local loading_msg = Ui.showLoadingMessage(T("Downloading, please wait …"))
 
         local function task_download()
-            --return Api.downloadBook(download_url, target_filepath, user_session and user_session.user_id, user_session and user_session.user_key, referer_url)
             return download_book(book, target_dir)
         end
 
         local function on_success_download(api_result)
-            -- i think this is just for login issue catching but we dont need a login
---[[             if api_result and api_result.error and retry_on_auth_error and Api.isAuthenticationError(api_result.error) then
-                Ui.closeMessage(loading_msg)
-                self:login(function(login_ok)
-                    if login_ok then
-                        attemptDownload(false)
-                    end
-                end)
-                return
-            end ]]
-
             Ui.closeMessage(loading_msg)
             if not string.find(api_result, 'Failed,', 1, true)  then
                 local has_wifi_toggle = Device:hasWifiToggle()
@@ -720,27 +224,14 @@ function Annas:downloadBook(book)
             else
                 local fail_msg = api_result
                 Ui.showErrorMessage(fail_msg)
-                pcall(os.remove, target_filepath)
             end
         end
 
         local function on_error_download(err_msg)
-            -- again authen stuff
---[[             if retry_on_auth_error and Api.isAuthenticationError(err_msg) then
-                Ui.closeMessage(loading_msg)
-                self:login(function(login_ok)
-                    if login_ok then
-                        attemptDownload(false)
-                    end
-                end)
-                return
-            end ]]
-            
             local error_string = tostring(err_msg)
             if string.find(error_string, "Download limit reached or file is an HTML page", 1, true) then
                 Ui.closeMessage(loading_msg)
                 Ui.showErrorMessage(T("Download limit reached. Please try again later or check your account."))
-                pcall(os.remove, target_filepath)
                 return
             end
             
@@ -752,7 +243,6 @@ function Annas:downloadBook(book)
                 AsyncHelper.run(task_download, on_success_download, on_error_download, loading_msg)
             end, function(final_err_msg)
                 -- Cancel callback - user already knows about the error
-                pcall(os.remove, target_filepath)
             end, loading_msg)
         end
 

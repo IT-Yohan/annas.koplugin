@@ -1,120 +1,62 @@
 local util = require("util")
 local logger = require("logger")
-local lfs = require("libs/libkoreader-lfs")
 local T = require("annas.gettext")
 
 local Config = {}
 
-Config.SETTINGS_BASE_URL_KEY = "annas_base_url"
-Config.SETTINGS_USERNAME_KEY = "annas_username"
-Config.SETTINGS_PASSWORD_KEY = "annas_password"
-Config.SETTINGS_USER_ID_KEY = "annas_user_id"
-Config.SETTINGS_USER_KEY_KEY = "annas_user_key"
 Config.SETTINGS_SEARCH_LANGUAGES_KEY = "annas_search_languages"
 Config.SETTINGS_SEARCH_EXTENSIONS_KEY = "annas_search_extensions"
 Config.SETTINGS_SEARCH_ORDERS_KEY = "annas_search_order"
 Config.SETTINGS_DOWNLOAD_DIR_KEY = "annas_download_dir"
 Config.SETTINGS_TURN_OFF_WIFI_AFTER_DOWNLOAD_KEY = "annas_turn_off_wifi_after_download"
-Config.SETTINGS_TIMEOUT_LOGIN_KEY = "annas_timeout_login"
 Config.SETTINGS_TIMEOUT_SEARCH_KEY = "annas_timeout_search"
-Config.SETTINGS_TIMEOUT_BOOK_DETAILS_KEY = "annas_timeout_book_details"
-Config.SETTINGS_TIMEOUT_RECOMMENDED_KEY = "annas_timeout_recommended"
-Config.SETTINGS_TIMEOUT_POPULAR_KEY = "annas_timeout_popular"
 Config.SETTINGS_TIMEOUT_DOWNLOAD_KEY = "annas_timeout_download"
 Config.SETTINGS_TIMEOUT_COVER_KEY = "annas_timeout_cover"
 Config.SETTINGS_TEST_MODE_KEY = "annas_test_mode"
-Config.CREDENTIALS_FILENAME = "annas_credentials.lua"
-Config.LEGACY_CREDENTIALS_FILENAME = "zlibrary_credentials.lua"
 
 Config.LEGACY_SETTINGS = {
-    [Config.SETTINGS_BASE_URL_KEY] = "zlibrary_base_url",
-    [Config.SETTINGS_USERNAME_KEY] = "zlibrary_username",
-    [Config.SETTINGS_PASSWORD_KEY] = "zlibrary_password",
-    [Config.SETTINGS_USER_ID_KEY] = "zlib_user_id",
-    [Config.SETTINGS_USER_KEY_KEY] = "zlib_user_key",
     [Config.SETTINGS_SEARCH_LANGUAGES_KEY] = "zlibrary_search_languages",
     [Config.SETTINGS_SEARCH_EXTENSIONS_KEY] = "zlibrary_search_extensions",
     [Config.SETTINGS_SEARCH_ORDERS_KEY] = "zlibrary_search_order",
     [Config.SETTINGS_DOWNLOAD_DIR_KEY] = "zlibrary_download_dir",
     [Config.SETTINGS_TURN_OFF_WIFI_AFTER_DOWNLOAD_KEY] = "zlibrary_turn_off_wifi_after_download",
-    [Config.SETTINGS_TIMEOUT_LOGIN_KEY] = "zlibrary_timeout_login",
     [Config.SETTINGS_TIMEOUT_SEARCH_KEY] = "zlibrary_timeout_search",
-    [Config.SETTINGS_TIMEOUT_BOOK_DETAILS_KEY] = "zlibrary_timeout_book_details",
-    [Config.SETTINGS_TIMEOUT_RECOMMENDED_KEY] = "zlibrary_timeout_recommended",
-    [Config.SETTINGS_TIMEOUT_POPULAR_KEY] = "zlibrary_timeout_popular",
     [Config.SETTINGS_TIMEOUT_DOWNLOAD_KEY] = "zlibrary_timeout_download",
     [Config.SETTINGS_TIMEOUT_COVER_KEY] = "zlibrary_timeout_cover",
     [Config.SETTINGS_TEST_MODE_KEY] = "zlibrary_test_mode",
+}
+
+Config.OBSOLETE_SETTINGS = {
+    "annas_base_url",
+    "annas_username",
+    "annas_password",
+    "annas_user_id",
+    "annas_user_key",
+    "annas_timeout_login",
+    "annas_timeout_book_details",
+    "annas_timeout_recommended",
+    "annas_timeout_popular",
+    "zlibrary_base_url",
+    "zlibrary_username",
+    "zlibrary_password",
+    "zlib_user_id",
+    "zlib_user_key",
+    "zlibrary_timeout_login",
+    "zlibrary_timeout_book_details",
+    "zlibrary_timeout_recommended",
+    "zlibrary_timeout_popular",
 }
 
 local function readRawSetting(key)
     return G_reader_settings:readSetting(key)
 end
 
-local function loadCredentialsOverrideFile(plugin_path, filename, is_legacy)
-    local cred_file_path = plugin_path .. filename
-    if lfs.attributes(cred_file_path, "mode") ~= "file" then
-        return false
-    end
-
-    local func, err = loadfile(cred_file_path)
-    if not func then
-        logger.warn("Failed to load " .. filename .. ": " .. tostring(err))
-        return true
-    end
-
-    local success, result = pcall(func)
-    if not success or type(result) ~= "table" then
-        logger.warn("Failed to execute or get table from " .. filename .. ": " .. tostring(result))
-        return true
-    end
-
-    if is_legacy then
-        logger.warn("Using deprecated override file " .. filename .. ". Rename it to " .. Config.CREDENTIALS_FILENAME .. " to keep the Annas namespace isolated.")
-    else
-        logger.info("Successfully loaded credentials from " .. filename)
-    end
-
-    if result.baseUrl then
-        Config.saveSetting(Config.SETTINGS_BASE_URL_KEY, result.baseUrl)
-    end
-    if result.username then
-        Config.saveSetting(Config.SETTINGS_USERNAME_KEY, result.username)
-    end
-    if result.email then
-        Config.saveSetting(Config.SETTINGS_USERNAME_KEY, result.email)
-    end
-    if result.password then
-        Config.saveSetting(Config.SETTINGS_PASSWORD_KEY, result.password)
-    end
-
-    return true
-end
-
 Config.DEFAULT_DOWNLOAD_DIR_FALLBACK = G_reader_settings:readSetting("home_dir")
              or require("apps/filemanager/filemanagerutil").getDefaultDir()
-Config.SEARCH_RESULTS_LIMIT = 30
 
--- Timeout configuration for different operations (block_timeout, total_timeout)
-Config.TIMEOUT_LOGIN = { 10, 15 }        -- Login operations
-Config.TIMEOUT_SEARCH = { 15, 15 }       -- Search operations
-Config.TIMEOUT_BOOK_DETAILS = { 15, 5 }  -- Book details operations
-Config.TIMEOUT_RECOMMENDED = { 30, 15 }  -- Recommended books operations
-Config.TIMEOUT_POPULAR = { 30, 15 }      -- Popular books operations
-Config.TIMEOUT_DOWNLOAD = { 15, -1 }    -- Book download operations (infinite total timeout if data flows)
-Config.TIMEOUT_COVER = { 5, 15 }        -- Cover image operations
-
-function Config.loadCredentialsFromFile(plugin_path)
-    if loadCredentialsOverrideFile(plugin_path, Config.CREDENTIALS_FILENAME, false) then
-        return
-    end
-
-    if loadCredentialsOverrideFile(plugin_path, Config.LEGACY_CREDENTIALS_FILENAME, true) then
-        return
-    end
-
-    logger.info(Config.CREDENTIALS_FILENAME .. " not found. Using UI settings if available.")
-end
+Config.TIMEOUT_SEARCH = { 15, 15 }
+Config.TIMEOUT_DOWNLOAD = { 15, -1 }
+Config.TIMEOUT_COVER = { 5, 15 }
 
 Config.SUPPORTED_LANGUAGES = {
     { name = "العربية", value = "arabic" },
@@ -174,92 +116,6 @@ Config.SUPPORTED_ORDERS = {
     { name = T("Oldest Added"), value = "oldest_added"},
     { name = T("Random"), value = "random"}
 }
-    --[[ { name = T("Most popular"), value = "popular" },
-    { name = T("Best match"), value = "bestmatch" },
-    { name = T("Recently added"), value = "date" },
-    { name = string.format("%s %s", T("Title"), "(A-Z)"), value = "titleA" },
-    { name = string.format("%s %s", T("Title"), "(Z-A)"), value = "title" },
-    { name = T("Year"), value = "year" },
-    { name = string.format("%s %s", T("File size"), "↓"), value = "filesize" },
-    { name = string.format("%s %s", T("File size"), "↑"), value = "filesizeA" }
-} ]]
-
-function Config.getBaseUrl()
-    local configured_url = Config.getSetting(Config.SETTINGS_BASE_URL_KEY)
-    if configured_url == nil or configured_url == "" then
-        return nil
-    end
-    return configured_url
-end
-
-function Config.setAndValidateBaseUrl(url_string)
-    if not url_string or url_string == "" then
-        return false, "Error: URL cannot be empty."
-    end
-
-    url_string = util.trim(url_string)
-
-    if not (string.sub(url_string, 1, 8) == "https://" or string.sub(url_string, 1, 7) == "http://") then
-        url_string = "https://" .. url_string
-    end
-
-    if not string.find(url_string, "%.") then
-        return false, "Error: URL must include a valid domain name (e.g., example.com)."
-    end
-
-    if string.sub(url_string, -1) == "/" then
-        url_string = string.sub(url_string, 1, -2)
-    end
-
-    Config.saveSetting(Config.SETTINGS_BASE_URL_KEY, url_string)
-    return true, nil
-end
-
-function Config.getRpcUrl()
-    local base = Config.getBaseUrl()
-    if not base then return nil end
-    return base .. "/rpc.php"
-end
-
-function Config.getSearchUrl(query)
-    local base = Config.getBaseUrl()
-    if not base then return nil end
-    return base .. "/eapi/book/search"
-end
-
-function Config.getBookUrl(href)
-    if not href then return nil end
-    local base = Config.getBaseUrl()
-    if not base then return nil end
-    if not href:match("^/") then href = "/" .. href end
-    return base .. href
-end
-
-function Config.getDownloadUrl(download_path)
-    if not download_path then return nil end
-    local base = Config.getBaseUrl()
-    if not base then return nil end
-    if not download_path:match("^/") then download_path = "/" .. download_path end
-    return base .. download_path
-end
-
-function Config.getBookDetailsUrl(book_id, book_hash)
-    local base = Config.getBaseUrl()
-    if not base or not book_id or not book_hash then return nil end
-    return base .. string.format("/eapi/book/%s/%s", book_id, book_hash)
-end
-
-function Config.getRecommendedBooksUrl()
-    local base = Config.getBaseUrl()
-    if not base then return nil end
-    return base .. "/eapi/user/book/recommended"
-end
-
-function Config.getMostPopularBooksUrl()
-    local base = Config.getBaseUrl()
-    if not base then return nil end
-    return base .. "/eapi/book/most-popular"
-end
 
 function Config.getSetting(key, default)
     local value = readRawSetting(key)
@@ -286,6 +142,15 @@ function Config.migrateLegacySettings()
     end
 end
 
+function Config.cleanupObsoleteSettings()
+    for _, key in ipairs(Config.OBSOLETE_SETTINGS) do
+        if readRawSetting(key) ~= nil then
+            Config.deleteSetting(key)
+            logger.info(string.format("Annas: removed obsolete setting %s", key))
+        end
+    end
+end
+
 function Config.saveSetting(key, value)
     if type(value) == "string" then
         G_reader_settings:saveSetting(key, util.trim(value))
@@ -296,30 +161,6 @@ end
 
 function Config.deleteSetting(key)
     G_reader_settings:delSetting(key)
-end
-
-function Config.getCredentials()
-    return {
-        username = Config.getSetting(Config.SETTINGS_USERNAME_KEY),
-        password = Config.getSetting(Config.SETTINGS_PASSWORD_KEY),
-    }
-end
-
-function Config.getUserSession()
-    return {
-        user_id = Config.getSetting(Config.SETTINGS_USER_ID_KEY),
-        user_key = Config.getSetting(Config.SETTINGS_USER_KEY_KEY),
-    }
-end
-
-function Config.saveUserSession(user_id, user_key)
-    Config.saveSetting(Config.SETTINGS_USER_ID_KEY, user_id)
-    Config.saveSetting(Config.SETTINGS_USER_KEY_KEY, user_key)
-end
-
-function Config.clearUserSession()
-    Config.deleteSetting(Config.SETTINGS_USER_ID_KEY)
-    Config.deleteSetting(Config.SETTINGS_USER_KEY_KEY)
 end
 
 function Config.getDownloadDir()
@@ -383,24 +224,8 @@ function Config.setTimeoutConfig(timeout_key, block_timeout, total_timeout)
     Config.saveSetting(timeout_key, {block_timeout, total_timeout})
 end
 
-function Config.getLoginTimeout()
-    return Config.getTimeoutConfig(Config.SETTINGS_TIMEOUT_LOGIN_KEY, Config.TIMEOUT_LOGIN)
-end
-
 function Config.getSearchTimeout()
     return Config.getTimeoutConfig(Config.SETTINGS_TIMEOUT_SEARCH_KEY, Config.TIMEOUT_SEARCH)
-end
-
-function Config.getBookDetailsTimeout()
-    return Config.getTimeoutConfig(Config.SETTINGS_TIMEOUT_BOOK_DETAILS_KEY, Config.TIMEOUT_BOOK_DETAILS)
-end
-
-function Config.getRecommendedTimeout()
-    return Config.getTimeoutConfig(Config.SETTINGS_TIMEOUT_RECOMMENDED_KEY, Config.TIMEOUT_RECOMMENDED)
-end
-
-function Config.getPopularTimeout()
-    return Config.getTimeoutConfig(Config.SETTINGS_TIMEOUT_POPULAR_KEY, Config.TIMEOUT_POPULAR)
 end
 
 function Config.getDownloadTimeout()
@@ -419,24 +244,8 @@ function Config.formatTimeoutForDisplay(timeout_pair)
     return string.format(T("Block: %ds, Total: %s"), block_timeout, total_display)
 end
 
-function Config.setLoginTimeout(block_timeout, total_timeout)
-    Config.setTimeoutConfig(Config.SETTINGS_TIMEOUT_LOGIN_KEY, block_timeout, total_timeout)
-end
-
 function Config.setSearchTimeout(block_timeout, total_timeout)
     Config.setTimeoutConfig(Config.SETTINGS_TIMEOUT_SEARCH_KEY, block_timeout, total_timeout)
-end
-
-function Config.setBookDetailsTimeout(block_timeout, total_timeout)
-    Config.setTimeoutConfig(Config.SETTINGS_TIMEOUT_BOOK_DETAILS_KEY, block_timeout, total_timeout)
-end
-
-function Config.setRecommendedTimeout(block_timeout, total_timeout)
-    Config.setTimeoutConfig(Config.SETTINGS_TIMEOUT_RECOMMENDED_KEY, block_timeout, total_timeout)
-end
-
-function Config.setPopularTimeout(block_timeout, total_timeout)
-    Config.setTimeoutConfig(Config.SETTINGS_TIMEOUT_POPULAR_KEY, block_timeout, total_timeout)
 end
 
 function Config.setDownloadTimeout(block_timeout, total_timeout)

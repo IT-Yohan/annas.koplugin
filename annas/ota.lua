@@ -149,7 +149,7 @@ function Ota.downloadUpdate(url, destination_path)
     local http_options = {
         url = url,
         method = "GET",
-        headers = { ["User-Agent"] = "KOReader-ZLibrary-Plugin" },
+        headers = { ["User-Agent"] = "KOReader-Annas-Plugin" },
         sink = sink,
         timeout = 300,
     }
@@ -189,9 +189,7 @@ function Ota.installUpdate(zip_filepath, plugin_base_path)
 
     --local target_unzip_dir = DataStorage:getDataDir()
     local target_unzip_dir = 'plugins/'
-    local excluded_file_path_in_zip = "plugins/annas.koplugin/annas_credentials.lua"
-
-    local unzip_command = string.format("unzip -o '%s' -d '%s' -x '%s'", zip_filepath, target_unzip_dir, excluded_file_path_in_zip)
+    local unzip_command = string.format("unzip -o '%s' -d '%s'", zip_filepath, target_unzip_dir)
     logger.info("Annas:Ota.installUpdate - Executing: " .. unzip_command)
 
     local ok, err_code, err_msg_os = os.execute(unzip_command)

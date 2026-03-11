@@ -2,7 +2,7 @@
 
 ## Localization Files
 
-This directory contains localization/translation files for the plugin. 
+This directory contains localization and translation files for the plugin.
 
 ### File Structure
 ```
@@ -30,9 +30,10 @@ l10n/
      3. Rename it to `koreader.po` and edit the translation content
 
 3. **Edit PO Files**
-   - Use a text editor or tools like [Poedit](https://poedit.net/) to translate `msgstr` fields (do not modify `msgid`)
-   - You can also submit your translation via **Pull Request** to help more users!
+  - Use a text editor or tools like [Poedit](https://poedit.net/) to translate `msgstr` fields. Do not modify `msgid` values manually.
+  - Update from `l10n/koreader.pot` when strings change in the live Anna plugin.
+  - You can submit translations via pull request.
 
 ## Notes
-- The plugin will automatically load translations based on koreader language
-- Will fall back to English if translation is missing
+- The plugin automatically loads translations based on the KOReader language.
+- Missing or outdated translations fall back to English.

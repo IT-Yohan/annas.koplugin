@@ -305,8 +305,6 @@ end
 -- Try KOReader's API with multiple header configurations
 local function fetch_with_api(url)
     print('=== Trying Api.makeHttpRequest for:', url)
-    
-    local user_session = Config.getUserSession()
     local hostname = url:match("://([^/]+)")
     
     -- Try different header configurations for compatibility
@@ -332,12 +330,6 @@ local function fetch_with_api(url)
     
     for i, headers in ipairs(header_configs) do
         print('=== API attempt', i, 'with', #headers, 'headers')
-        
-        -- Add session cookie if available
-        if user_session and user_session.user_id and user_session.user_key then
-            headers["Cookie"] = string.format("remix_userid=%s; remix_userkey=%s", 
-                                             user_session.user_id, user_session.user_key)
-        end
         
         local success, http_result = pcall(function()
             return Api.makeHttpRequest{

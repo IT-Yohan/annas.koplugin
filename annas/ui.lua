@@ -10,9 +10,7 @@ local Menu = require("annas.menu")
 local util = require("util")
 local logger = require("logger")
 local Config = require("annas.config")
-local Api = require("annas.api")
 local Ota = require("annas.ota")
-local AsyncHelper = require("annas.async_helper")
 require('src.scraper')
 require('src.update')
 local Ui = {}
@@ -140,6 +138,7 @@ function Ui.showDownloadDirectoryDialog()
 end
 
 function Ui.showSettingsDialog()
+    local dialog
 
     local full_source_path = debug.getinfo(1, "S").source
     if full_source_path:sub(1,1) == "@" then
@@ -150,20 +149,24 @@ function Ui.showSettingsDialog()
 
     dialog = ButtonDialog:new{
         title = T("Settings"),
-        input = def_input,
         buttons = {
             {{
-            text = T("Set Download Directory"),
+            text = T("Set download directory"),
             callback = function()
                 _closeAndUntrackDialog(dialog)
                 Ui.showDownloadDirectoryDialog()
             end,
             }},{{
-            text = T("Check for Updates"),
+            text = T("Timeout settings"),
+            callback = function()
+                _closeAndUntrackDialog(dialog)
+                Ui.showAllTimeoutConfigDialog(_plugin_instance and _plugin_instance.ui)
+            end,
+            }},{{
+            text = T("Check for updates"),
             keep_menu_open = false,
             separator = true,
             callback = function()
-                
                 _closeAndUntrackDialog(dialog)
                 if plugin_path then
                     Ota.startUpdateProcess(plugin_path)
@@ -172,47 +175,10 @@ function Ui.showSettingsDialog()
                     Ui.showErrorMessage(T("Error: Plugin path not found. Cannot check for updates."))
                 end
             end,
-            --[[callback = function()
-                _closeAndUntrackDialog(dialog)
-                local full_source_path = debug.getinfo(1, "S").source
-                if full_source_path:sub(1,1) == "@" then
-                    full_source_path = full_source_path:sub(2)
-                end
-                local plugin_path, _ = util.splitFilePathName(full_source_path):gsub("/+", "/")
-
-                if plugin_path then
-
-                    resp = check_version(plugin_path)
-
-                    if resp.err == 0 then
-                        Ui.showInfoMessage(T(resp.msg))
-                        resp = download_update(resp.sha)
-
-                        if resp.err == 0 then
-                            Ui.showInfoMessage(T(resp.msg))
-                        else
-                            Ui.showErrorMessage(T(resp.msg))
-                        end
-
-                    elseif resp.err == 1 then
-                        Ui.showErrorMessage(T(resp.msg))
-                    else
-                        Ui.showInfoMessage(T(resp.msg))
-                    end
-
-                else
-                    logger.err("Annas: Plugin path not available for OTA update.")
-                    Ui.showErrorMessage(T("Error: Plugin path not found. Cannot check for updates."))
-                end
-            end,]]--
             }}
         }
     }
     _showAndTrackDialog(dialog)
-    
-    
-    
-    
 end
 
 local function _showMultiSelectionDialog(parent_ui, title, setting_key, options_list, ok_callback, is_single)
@@ -365,7 +331,7 @@ function Ui.showGenericInputDialog(title, setting_key, current_value_or_default,
     dialog:onShowKeyboard()
 end
 
-function Ui.showSearchDialog(parent_zlibrary, def_input, Ota)
+function Ui.showSearchDialog(parent_zlibrary, def_input)
     -- save last search input
     if Ui._last_search_input and not def_input then
         def_input = Ui._last_search_input
@@ -401,7 +367,7 @@ function Ui.showSearchDialog(parent_zlibrary, def_input, Ota)
     end
 
     dialog = InputDialog:new{
-        title = T("Search Annas Archive"),
+        title = T("Anna's Archive search"),
         input = def_input,
         buttons = {{{
         text = T("Search"),
@@ -447,8 +413,7 @@ function Ui.showSearchDialog(parent_zlibrary, def_input, Ota)
             keep_menu_open = true,
             callback = function()
                 _closeAndUntrackDialog(dialog)
-                print("show settings")
-                Ui.showSettingsDialog(Ota)
+                Ui.showSettingsDialog()
             end,
         }},{{
             text = T("Cancel"),
@@ -577,7 +542,7 @@ function Ui.showBookDetails(parent_zlibrary, book, clear_cache_callback)
                 end,
             })
         else
-            table.insert(details_menu_items, { text = string.format(T("Format: %s (Download source unavailable [zlib, lgli])"), book.format), enabled = false })
+            table.insert(details_menu_items, { text = string.format(T("Format: %s (Download source unavailable)"), book.format), enabled = false })
         end
     elseif book.download then
         table.insert(details_menu_items, {
@@ -692,109 +657,6 @@ function Ui.confirmOpenBook(filename, has_wifi_toggle, default_turn_off_wifi, ok
     showDialog()
 end
 
-function Ui.showRecommendedBooksMenu(ui_self, books, plugin_self)
-    local menu_items = {}
-    for _, book in ipairs(books) do
-        local title = book.title or T("Untitled")
-        local author = book.author or T("Unknown Author")
-        local menu_text = string.format("%s - %s", title, author)
-        table.insert(menu_items, {
-            text = menu_text,
-            callback = function()
-                plugin_self:onSelectRecommendedBook(book)
-            end,
-        })
-    end
-
-    if #menu_items == 0 then
-        Ui.showInfoMessage(T("No recommended books found, please try again. Sometimes this requires a couple of retries."))
-        return
-    end
-    local menu = Menu:new({
-        title = T("Z-library Recommended Books"),
-        item_table = menu_items,
-        items_per_page = 10,
-        show_captions = true,
-        parent = ui_self.document_menu_parent_holder,
-        is_popout = false,
-        is_borderless = true,
-        title_bar_fm_style = true,
-        multilines_show_more_text = true,
-    })
-    _showAndTrackDialog(menu)
-end
-
-function Ui.showMostPopularBooksMenu(ui_self, books, plugin_self)
-    local menu_items = {}
-    for _, book in ipairs(books) do
-        local title = book.title or T("Untitled")
-        local author = book.author or T("Unknown Author")
-        local menu_text = string.format("%s - %s", title, author)
-        table.insert(menu_items, {
-            text = menu_text,
-            callback = function()
-                plugin_self:onSelectRecommendedBook(book)
-            end,
-        })
-    end
-
-    if #menu_items == 0 then
-        Ui.showInfoMessage(T("No most popular books found. The list was empty, please try again."))
-        return
-    end
-
-    local menu = Menu:new({
-        title = T("Z-library Most Popular Books"),
-        item_table = menu_items,
-        items_per_page = 10,
-        show_captions = true,
-        parent = ui_self.document_menu_parent_holder,
-        is_popout = false,
-        is_borderless = true,
-        title_bar_fm_style = true,
-        multilines_show_more_text = true
-    })
-    _showAndTrackDialog(menu)
-end
-
-function Ui.confirmShowRecommendedBooks(ok_callback)
-    if _plugin_instance and _plugin_instance.dialog_manager then
-        _plugin_instance.dialog_manager:showConfirmDialog({
-            text = T("Fetch most recommended book from Z-library?"),
-            ok_text = T("OK"),
-            cancel_text = T("Cancel"),
-            ok_callback = ok_callback,
-        })
-    else
-        local dialog = ConfirmBox:new{
-            text = T("Fetch most recommended book from Z-library?"),
-            ok_text = T("OK"),
-            cancel_text = T("Cancel"),
-            ok_callback = ok_callback,
-        }
-        UIManager:show(dialog)
-    end
-end
-
-function Ui.confirmShowMostPopularBooks(ok_callback)
-    if _plugin_instance and _plugin_instance.dialog_manager then
-        _plugin_instance.dialog_manager:showConfirmDialog({
-            text = T("Fetch most popular books from Z-library?"),
-            ok_text = T("OK"),
-            cancel_text = T("Cancel"),
-            ok_callback = ok_callback,
-        })
-    else
-        local dialog = ConfirmBox:new{
-            text = T("Fetch most popular books from Z-library?"),
-            ok_text = T("OK"),
-            cancel_text = T("Cancel"),
-            ok_callback = ok_callback,
-        }
-        UIManager:show(dialog)
-    end
-end
-
 function Ui.createSingleBookMenu(ui_self, title, menu_items)
     local menu = Menu:new{
         title = title or T("Book Details"),
@@ -807,24 +669,6 @@ function Ui.createSingleBookMenu(ui_self, title, menu_items)
     }
     _showAndTrackDialog(menu)
     return menu
-end
-
-function Ui.showSearchErrorDialog(err_msg, query, user_session, selected_languages, selected_extensions, selected_order, current_page, loading_msg_to_close, original_on_success, original_on_error)
-    local retry_callback = function()
-        local new_loading_msg = Ui.showLoadingMessage(T("Retrying search for \"") .. query .. "\"...")
-        local retry_task = function()
-            return Api.search(query, user_session.user_id, user_session.user_key, selected_languages, selected_extensions, selected_order, current_page)
-        end
-        AsyncHelper.run(retry_task, original_on_success, function(new_err_msg)
-            Ui.showSearchErrorDialog(new_err_msg, query, user_session, selected_languages, selected_extensions, selected_order, current_page, new_loading_msg, original_on_success, original_on_error)
-        end, new_loading_msg)
-    end
-    
-    local cancel_callback = function(err)
-        original_on_error(err)
-    end
-    
-    Ui.showRetryErrorDialog(err_msg, T("Search"), retry_callback, cancel_callback, loading_msg_to_close)
 end
 
 function Ui.showRetryErrorDialog(err_msg, operation_name, retry_callback, cancel_callback, loading_msg_to_close)
@@ -842,30 +686,17 @@ function Ui.showRetryErrorDialog(err_msg, operation_name, retry_callback, cancel
     if is_http_400 or is_timeout or is_network_error then
         local retry_message
         if is_timeout then
-            -- Get timeout info to show to user
             local timeout_info = ""
             local operation_lower = string.lower(tostring(operation_name))
             if string.find(operation_lower, "search") then
                 local search_timeout = Config.getSearchTimeout()
                 timeout_info = string.format(" (%ds)", search_timeout[1])
-            elseif string.find(operation_lower, "login") then
-                local login_timeout = Config.getLoginTimeout()
-                timeout_info = string.format(" (%ds)", login_timeout[1])
-            elseif string.find(operation_lower, "recommend") then
-                local rec_timeout = Config.getRecommendedTimeout()
-                timeout_info = string.format(" (%ds)", rec_timeout[1])
-            elseif string.find(operation_lower, "popular") then
-                local pop_timeout = Config.getPopularTimeout()
-                timeout_info = string.format(" (%ds)", pop_timeout[1])
             elseif string.find(operation_lower, "cover") then
                 local cover_timeout = Config.getCoverTimeout()
                 timeout_info = string.format(" (%ds)", cover_timeout[1])
             elseif string.find(operation_lower, "download") then
                 local download_timeout = Config.getDownloadTimeout()
                 timeout_info = string.format(" (%ds)", download_timeout[1])
-            elseif string.find(operation_lower, "book") or string.find(operation_lower, "details") then
-                local book_timeout = Config.getBookDetailsTimeout()
-                timeout_info = string.format(" (%ds)", book_timeout[1])
             end
             retry_message = string.format(T("%s failed due to a timeout%s. Would you like to retry?"), operation_name, timeout_info)
         elseif is_network_error then
@@ -1037,16 +868,6 @@ function Ui.showAllTimeoutConfigDialog(parent_ui)
     
     timeout_items = {
         {
-            text = T("Login timeouts"),
-            mandatory_func = function()
-                return Config.formatTimeoutForDisplay(Config.getLoginTimeout())
-            end,
-            callback = function()
-                Ui.showTimeoutConfigDialog(parent_ui, T("Login"), Config.SETTINGS_TIMEOUT_LOGIN_KEY, 
-                    Config.getLoginTimeout, Config.setLoginTimeout, refreshMainDialog)
-            end
-        },
-        {
             text = T("Search timeouts"),
             mandatory_func = function()
                 return Config.formatTimeoutForDisplay(Config.getSearchTimeout())
@@ -1054,36 +875,6 @@ function Ui.showAllTimeoutConfigDialog(parent_ui)
             callback = function()
                 Ui.showTimeoutConfigDialog(parent_ui, T("Search"), Config.SETTINGS_TIMEOUT_SEARCH_KEY,
                     Config.getSearchTimeout, Config.setSearchTimeout, refreshMainDialog)
-            end
-        },
-        {
-            text = T("Book details timeouts"),
-            mandatory_func = function()
-                return Config.formatTimeoutForDisplay(Config.getBookDetailsTimeout())
-            end,
-            callback = function()
-                Ui.showTimeoutConfigDialog(parent_ui, T("Book details"), Config.SETTINGS_TIMEOUT_BOOK_DETAILS_KEY,
-                    Config.getBookDetailsTimeout, Config.setBookDetailsTimeout, refreshMainDialog)
-            end
-        },
-        {
-            text = T("Recommended books timeouts"),
-            mandatory_func = function()
-                return Config.formatTimeoutForDisplay(Config.getRecommendedTimeout())
-            end,
-            callback = function()
-                Ui.showTimeoutConfigDialog(parent_ui, T("Recommended books"), Config.SETTINGS_TIMEOUT_RECOMMENDED_KEY,
-                    Config.getRecommendedTimeout, Config.setRecommendedTimeout, refreshMainDialog)
-            end
-        },
-        {
-            text = T("Popular books timeouts"),
-            mandatory_func = function()
-                return Config.formatTimeoutForDisplay(Config.getPopularTimeout())
-            end,
-            callback = function()
-                Ui.showTimeoutConfigDialog(parent_ui, T("Popular books"), Config.SETTINGS_TIMEOUT_POPULAR_KEY,
-                    Config.getPopularTimeout, Config.setPopularTimeout, refreshMainDialog)
             end
         },
         {
@@ -1118,11 +909,7 @@ function Ui.showAllTimeoutConfigDialog(parent_ui)
                         ok_text = T("Reset All"),
                         cancel_text = T("Cancel"),
                         ok_callback = function()
-                            Config.deleteSetting(Config.SETTINGS_TIMEOUT_LOGIN_KEY)
                             Config.deleteSetting(Config.SETTINGS_TIMEOUT_SEARCH_KEY)
-                            Config.deleteSetting(Config.SETTINGS_TIMEOUT_BOOK_DETAILS_KEY)
-                            Config.deleteSetting(Config.SETTINGS_TIMEOUT_RECOMMENDED_KEY)
-                            Config.deleteSetting(Config.SETTINGS_TIMEOUT_POPULAR_KEY)
                             Config.deleteSetting(Config.SETTINGS_TIMEOUT_DOWNLOAD_KEY)
                             Config.deleteSetting(Config.SETTINGS_TIMEOUT_COVER_KEY)
                             Ui.showInfoMessage(T("All timeout settings reset to defaults"))
