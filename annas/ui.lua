@@ -84,6 +84,10 @@ local function _summarizeFormatSelection()
     return string.format(T("%d selected"), #selected_extensions)
 end
 
+local function _summarizeOtaToken()
+    return Config.hasOtaToken() and T("Configured") or T("Not set")
+end
+
 local function _showSingleChoiceDialog(parent_ui, title, options_list, selected_value, on_select)
     local choice_menu
     local menu_items = {}
@@ -239,7 +243,7 @@ function Ui.showSettingsDialog(parent_ui)
                 text = T("Search languages"),
                 mandatory_func = _summarizeLanguageSelection,
                 callback = function()
-                    Ui.showSettingsDialog(parent_zlibrary)
+                    Ui.showLanguageSelectionDialog(settings_parent, refreshSettingsMenu)
                 end,
             },
             {
@@ -350,6 +354,97 @@ function Ui.showSettingsDialog(parent_ui)
             },
             {
                 text = "---",
+            },
+            {
+                text = T("OTA updates"),
+                mandatory_func = function()
+                    return Config.getOtaEnabled() and T("On") or T("Off")
+                end,
+                callback = function()
+                    Config.setOtaEnabled(not Config.getOtaEnabled())
+                    refreshSettingsMenu()
+                end,
+            },
+            {
+                text = T("OTA repository"),
+                mandatory_func = function()
+                    return Config.getOtaRepo()
+                end,
+                callback = function()
+                    Ui.showGenericInputDialog(
+                        T("OTA repository"),
+                        Config.SETTINGS_OTA_REPO_KEY,
+                        Config.getOtaRepo(),
+                        false,
+                        function(input_value)
+                            local ok, result = Config.setOtaRepo(input_value)
+                            if not ok then
+                                Ui.showErrorMessage(result)
+                                return false
+                            end
+                            refreshSettingsMenu()
+                            return true
+                        end
+                    )
+                end,
+            },
+            {
+                text = T("OTA channel"),
+                mandatory_func = function()
+                    return Config.getOtaChannelName()
+                end,
+                callback = function()
+                    _showSingleChoiceDialog(settings_parent, T("OTA channel"), Config.SUPPORTED_OTA_CHANNELS, Config.getOtaChannel(), function(value)
+                        Config.setOtaChannel(value)
+                        refreshSettingsMenu()
+                    end)
+                end,
+            },
+            {
+                text = T("OTA asset name"),
+                mandatory_func = function()
+                    return Config.getOtaAssetName()
+                end,
+                callback = function()
+                    Ui.showGenericInputDialog(
+                        T("OTA asset name"),
+                        Config.SETTINGS_OTA_ASSET_NAME_KEY,
+                        Config.getOtaAssetName(),
+                        false,
+                        function(input_value)
+                            Config.setOtaAssetName(input_value)
+                            refreshSettingsMenu()
+                            return true
+                        end
+                    )
+                end,
+            },
+            {
+                text = T("GitHub token"),
+                mandatory_func = _summarizeOtaToken,
+                callback = function()
+                    Ui.showGenericInputDialog(
+                        T("GitHub token"),
+                        Config.SETTINGS_OTA_TOKEN_KEY,
+                        Config.getOtaToken() or "",
+                        true,
+                        function(input_value)
+                            Config.setOtaToken(input_value)
+                            refreshSettingsMenu()
+                            return true
+                        end
+                    )
+                end,
+            },
+            {
+                text = T("Allow source ZIP fallback"),
+                mandatory_func = function()
+                    return Config.getOtaAllowZipball() and T("On") or T("Off")
+                end,
+                callback = function()
+                    Config.setOtaAllowZipball(not Config.getOtaAllowZipball())
+                    refreshSettingsMenu()
+                end,
             },
             {
                 text = T("Check for updates"),
@@ -487,7 +582,7 @@ function Ui.showGenericInputDialog(title, setting_key, current_value_or_default,
                 text = T("Set"),
                 callback = function()
                     local raw_input = dialog:getInputText() or ""
-                    Ui.showSettingsDialog(parent_zlibrary)
+                    local close_dialog_after_action = false
 
                     if validate_and_save_callback then
                         if validate_and_save_callback(raw_input, setting_key) then

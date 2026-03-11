@@ -17,6 +17,12 @@ Config.SETTINGS_RETRY_COUNT_KEY = "annas_retry_count"
 Config.SETTINGS_TIMEOUT_POLICY_KEY = "annas_timeout_policy"
 Config.SETTINGS_PREFERRED_SOURCE_KEY = "annas_preferred_source"
 Config.SETTINGS_TEST_MODE_KEY = "annas_test_mode"
+Config.SETTINGS_OTA_ENABLED_KEY = "annas_ota_enabled"
+Config.SETTINGS_OTA_REPO_KEY = "annas_ota_repo"
+Config.SETTINGS_OTA_CHANNEL_KEY = "annas_ota_channel"
+Config.SETTINGS_OTA_ASSET_NAME_KEY = "annas_ota_asset_name"
+Config.SETTINGS_OTA_TOKEN_KEY = "annas_ota_token"
+Config.SETTINGS_OTA_ALLOW_ZIPBALL_KEY = "annas_ota_allow_zipball"
 
 Config.LEGACY_SETTINGS = {
     [Config.SETTINGS_SEARCH_LANGUAGES_KEY] = "zlibrary_search_languages",
@@ -62,6 +68,10 @@ Config.TIMEOUT_POLICY_STANDARD = "standard"
 Config.TIMEOUT_POLICY_RELAXED = "relaxed"
 Config.TIMEOUT_POLICY_AGGRESSIVE = "aggressive"
 Config.TIMEOUT_POLICY_CUSTOM = "custom"
+Config.OTA_CHANNEL_STABLE = "stable"
+Config.OTA_CHANNEL_PRERELEASE = "prerelease"
+Config.DEFAULT_OTA_REPO = "fischer-hub/annas.koplugin"
+Config.DEFAULT_OTA_ASSET_NAME = "annas.koplugin.zip"
 
 Config.TIMEOUT_PROFILES = {
     [Config.TIMEOUT_POLICY_STANDARD] = {
@@ -162,6 +172,11 @@ Config.SUPPORTED_TIMEOUT_POLICIES = {
     { name = T("Relaxed"), value = Config.TIMEOUT_POLICY_RELAXED },
     { name = T("Aggressive"), value = Config.TIMEOUT_POLICY_AGGRESSIVE },
     { name = T("Custom"), value = Config.TIMEOUT_POLICY_CUSTOM },
+}
+
+Config.SUPPORTED_OTA_CHANNELS = {
+    { name = T("Stable releases"), value = Config.OTA_CHANNEL_STABLE },
+    { name = T("Include pre-releases"), value = Config.OTA_CHANNEL_PRERELEASE },
 }
 
 Config.SUPPORTED_PREFERRED_SOURCES = {
@@ -376,6 +391,131 @@ end
 
 function Config.setPreferredSource(value)
     Config.saveSetting(Config.SETTINGS_PREFERRED_SOURCE_KEY, value)
+end
+
+function Config.getOtaEnabled()
+    return Config.getSetting(Config.SETTINGS_OTA_ENABLED_KEY, true)
+end
+
+function Config.setOtaEnabled(enabled)
+    Config.saveSetting(Config.SETTINGS_OTA_ENABLED_KEY, enabled)
+end
+
+function Config.normalizeOtaRepo(value)
+    local normalized = util.trim(tostring(value or ""))
+    normalized = normalized:gsub("^https?://github%.com/", "")
+    normalized = normalized:gsub("^git@github%.com:", "")
+    normalized = normalized:gsub("%.git$", "")
+    normalized = normalized:gsub("^/+", "")
+    normalized = normalized:gsub("/+$", "")
+    return normalized
+end
+
+function Config.validateOtaRepo(value)
+    local normalized = Config.normalizeOtaRepo(value)
+    if normalized == "" then
+        return false, T("Repository cannot be empty.")
+    end
+
+    if not normalized:match("^[%w%._%-]+/[%w%._%-]+$") then
+        return false, T("Repository must use the form owner/repo.")
+    end
+
+    return true, normalized
+end
+
+function Config.getOtaRepo()
+    local value = Config.getSetting(Config.SETTINGS_OTA_REPO_KEY, Config.DEFAULT_OTA_REPO)
+    local ok, normalized = Config.validateOtaRepo(value)
+    if ok then
+        return normalized
+    end
+
+    return Config.DEFAULT_OTA_REPO
+end
+
+function Config.setOtaRepo(value)
+    local ok, normalized_or_error = Config.validateOtaRepo(value)
+    if not ok then
+        return false, normalized_or_error
+    end
+
+    Config.saveSetting(Config.SETTINGS_OTA_REPO_KEY, normalized_or_error)
+    return true, normalized_or_error
+end
+
+function Config.getOtaChannel()
+    local value = Config.getSetting(Config.SETTINGS_OTA_CHANNEL_KEY, Config.OTA_CHANNEL_STABLE)
+    for _, option in ipairs(Config.SUPPORTED_OTA_CHANNELS) do
+        if option.value == value then
+            return value
+        end
+    end
+
+    return Config.OTA_CHANNEL_STABLE
+end
+
+function Config.getOtaChannelName()
+    return findOptionName(Config.SUPPORTED_OTA_CHANNELS, Config.getOtaChannel(), T("Stable releases"))
+end
+
+function Config.setOtaChannel(value)
+    Config.saveSetting(Config.SETTINGS_OTA_CHANNEL_KEY, value)
+end
+
+function Config.getOtaAssetName()
+    local value = util.trim(tostring(Config.getSetting(Config.SETTINGS_OTA_ASSET_NAME_KEY, Config.DEFAULT_OTA_ASSET_NAME) or ""))
+    if value == "" then
+        return Config.DEFAULT_OTA_ASSET_NAME
+    end
+
+    return value
+end
+
+function Config.setOtaAssetName(value)
+    local normalized = util.trim(tostring(value or ""))
+    if normalized == "" then
+        Config.deleteSetting(Config.SETTINGS_OTA_ASSET_NAME_KEY)
+        return
+    end
+
+    Config.saveSetting(Config.SETTINGS_OTA_ASSET_NAME_KEY, normalized)
+end
+
+function Config.getOtaToken()
+    local value = Config.getSetting(Config.SETTINGS_OTA_TOKEN_KEY)
+    if value == nil then
+        return nil
+    end
+
+    value = util.trim(tostring(value))
+    if value == "" then
+        return nil
+    end
+
+    return value
+end
+
+function Config.setOtaToken(value)
+    local normalized = util.trim(tostring(value or ""))
+    if normalized == "" then
+        Config.deleteSetting(Config.SETTINGS_OTA_TOKEN_KEY)
+        return
+    end
+
+    Config.saveSetting(Config.SETTINGS_OTA_TOKEN_KEY, normalized)
+end
+
+function Config.hasOtaToken()
+    return Config.getOtaToken() ~= nil
+end
+
+function Config.getOtaAllowZipball()
+    return Config.getSetting(Config.SETTINGS_OTA_ALLOW_ZIPBALL_KEY, false)
+end
+
+function Config.setOtaAllowZipball(enabled)
+    Config.saveSetting(Config.SETTINGS_OTA_ALLOW_ZIPBALL_KEY, enabled)
 end
 
 function Config.getTimeoutDefaults(kind)

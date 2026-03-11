@@ -125,7 +125,7 @@ The settings screen now includes:
 - Automatic retry count for transient network failures
 - Preferred download source for LibGen-backed downloads
 - Timeout policy presets, plus advanced per-operation timeout editing
-- Update check
+- OTA update source, channel, asset name, optional GitHub token, and update check
 
 Notes:
 
@@ -133,6 +133,33 @@ Notes:
 - There is no `annas_credentials.lua` override file anymore.
 - Recommended and most-popular Z-library-era browsing paths were removed because Anna's Archive does not use that API flow in this plugin.
 - The current download flow still depends on supported LibGen mirrors exposed through Anna's Archive result pages.
+
+### OTA update configuration
+
+OTA is now configurable from `Anna Settings`.
+
+Useful fields:
+
+- `OTA updates`: enables or disables the update checker entirely
+- `OTA repository`: GitHub repository in `owner/repo` form
+- `OTA channel`: stable releases only, or include pre-releases
+- `OTA asset name`: preferred ZIP asset name to install
+- `GitHub token`: optional, but required if the OTA repository is private
+- `Allow source ZIP fallback`: allows fallback to GitHub's source archive when no matching release asset exists
+
+If you want OTA to update from your private fork, set `OTA repository` to your own GitHub repo and set a GitHub token that can read that private repository's releases.
+
+### Automated releases from `main`
+
+This repository is configured so that each push to `main` creates a GitHub release automatically.
+
+The workflow does three things:
+
+1. increments the patch version in `_meta.lua`
+2. commits that version bump back to `main`
+3. publishes a release with an `annas.koplugin.zip` asset
+
+That release asset name matches the plugin OTA default, so the Kindle updater can install it directly.
 
 ## DNS Settings
 

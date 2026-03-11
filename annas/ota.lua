@@ -7,17 +7,55 @@ local UIManager = require("ui/uimanager")
 local util = require("util")
 local NetworkMgr = require("ui/network/manager")
 local Api = require("annas.api")
+local Config = require("annas.config")
 --local Ui = require("annas.ui_ota")
 local DataStorage = require("datastorage")
 local lfs = require("libs/libkoreader-lfs")
 
 local Ota = {}
 
-local GITHUB_REPO = "fischer-hub/annas.koplugin"
-local LATEST_RELEASE_URL = "https://api.github.com/repos/" .. GITHUB_REPO .. "/releases/latest"
-
 local current_ota_status_widget = nil
 local IS_WINDOWS = package.config:sub(1, 1) == "\\"
+
+local function build_release_url(repo, channel)
+    if channel == Config.OTA_CHANNEL_PRERELEASE then
+        return "https://api.github.com/repos/" .. repo .. "/releases"
+    end
+
+    return "https://api.github.com/repos/" .. repo .. "/releases/latest"
+end
+
+local function build_github_headers(accept)
+    local headers = {
+        ["User-Agent"] = "KOReader-Annas-Plugin",
+        ["Accept"] = accept or "application/vnd.github.v3+json",
+    }
+
+    local token = Config.getOtaToken()
+    if token then
+        headers["Authorization"] = "Bearer " .. token
+    end
+
+    return headers
+end
+
+local function normalize_release_info(payload, channel)
+    if channel ~= Config.OTA_CHANNEL_PRERELEASE then
+        return payload
+    end
+
+    if type(payload) ~= "table" then
+        return nil
+    end
+
+    for _, release_info in ipairs(payload) do
+        if type(release_info) == "table" and not release_info.draft then
+            return release_info
+        end
+    end
+
+    return nil
+end
 
 local function normalize_path(path)
     local normalized = tostring(path or ""):gsub("\\", "/"):gsub("/+", "/")
@@ -266,12 +304,25 @@ local function extract_zip_with_shell(zip_filepath, destination_dir)
 end
 
 local function choose_release_package(release_info)
+    local preferred_asset_name = Config.getOtaAssetName()
+
     if type(release_info.assets) == "table" then
         for _, asset in ipairs(release_info.assets) do
-            if asset.name == "annas.koplugin.zip" and asset.browser_download_url then
+            if asset.name == preferred_asset_name and (asset.url or asset.browser_download_url) then
                 return {
-                    url = asset.browser_download_url,
+                    url = asset.url or asset.browser_download_url,
                     name = asset.name,
+                    use_api_asset = asset.url ~= nil,
+                }
+            end
+        end
+
+        for _, asset in ipairs(release_info.assets) do
+            if asset.name == "annas.koplugin.zip" and (asset.url or asset.browser_download_url) then
+                return {
+                    url = asset.url or asset.browser_download_url,
+                    name = asset.name,
+                    use_api_asset = asset.url ~= nil,
                 }
             end
         end
@@ -279,17 +330,19 @@ local function choose_release_package(release_info)
         for _, asset in ipairs(release_info.assets) do
             if type(asset.name) == "string" and asset.name:match("%.zip$") and asset.browser_download_url then
                 return {
-                    url = asset.browser_download_url,
+                    url = asset.url or asset.browser_download_url,
                     name = asset.name,
+                    use_api_asset = asset.url ~= nil,
                 }
             end
         end
     end
 
-    if release_info.zipball_url then
+    if Config.getOtaAllowZipball() and release_info.zipball_url then
         return {
             url = release_info.zipball_url,
             name = "annas_plugin_update.zip",
+            use_api_asset = false,
         }
     end
 
@@ -366,16 +419,16 @@ local function isVersionOlder(version1, version2)
 end
 
 function Ota.fetchLatestReleaseInfo()
-    logger.info("Annas:Ota.fetchLatestReleaseInfo - START")
+    local repo = Config.getOtaRepo()
+    local channel = Config.getOtaChannel()
+    local release_url = build_release_url(repo, channel)
+    logger.info("Annas:Ota.fetchLatestReleaseInfo - START for repo: " .. repo .. ", channel: " .. channel)
     local result = { release_info = nil, error = nil }
 
     local http_options = {
-        url = LATEST_RELEASE_URL,
+        url = release_url,
         method = "GET",
-        headers = {
-            ["User-Agent"] = "KOReader-Annas-Plugin",
-            ["Accept"] = "application/vnd.github.v3+json",
-        },
+        headers = build_github_headers("application/vnd.github.v3+json"),
         timeout = 20,
     }
 
@@ -406,12 +459,19 @@ function Ota.fetchLatestReleaseInfo()
         return result
     end
 
+    local release_info = normalize_release_info(data, channel)
+    if not release_info then
+        result.error = "No matching release found for configured OTA channel"
+        logger.err("Annas:Ota.fetchLatestReleaseInfo - END (No release) - Error: " .. result.error)
+        return result
+    end
+
     logger.info("Annas:Ota.fetchLatestReleaseInfo - END (Success)")
-    result.release_info = data
+    result.release_info = release_info
     return result
 end
 
-function Ota.downloadUpdate(url, destination_path)
+function Ota.downloadUpdate(url, destination_path, headers)
     logger.info(string.format("Annas:Ota.downloadUpdate - START - URL: %s, Dest: %s", url, destination_path))
     local result = { success = false, error = nil }
 
@@ -426,7 +486,7 @@ function Ota.downloadUpdate(url, destination_path)
     local http_options = {
         url = url,
         method = "GET",
-        headers = { ["User-Agent"] = "KOReader-Annas-Plugin" },
+        headers = headers or build_github_headers(),
         sink = sink,
         timeout = 300,
     }
@@ -566,6 +626,12 @@ end
 function Ota.startUpdateProcess(plugin_path_from_main)
     logger.info("Annas:Ota.startUpdateProcess - Initiated by user. Plugin path: " .. tostring(plugin_path_from_main))
 
+    if not Config.getOtaEnabled() then
+        logger.info("Annas:Ota.startUpdateProcess - OTA is disabled in settings.")
+        _show_ota_final_message(T("OTA updates are disabled in Anna Settings."), false)
+        return
+    end
+
     if not NetworkMgr:isOnline() then
         logger.warn("Annas:Ota.startUpdateProcess - No internet connection.")
         _show_ota_final_message(T("No internet connection detected. Please connect to the internet and try again."), true)
@@ -622,7 +688,7 @@ function Ota.startUpdateProcess(plugin_path_from_main)
     local package_info = choose_release_package(release_info)
     if not package_info or not package_info.url then
         logger.warn("Annas:Ota.startUpdateProcess - No download URL found in release information.")
-        _show_ota_final_message(T("Could not find a download link for the update."), true)
+        _show_ota_final_message(T("Could not find a download link for the configured update source."), true)
         return
     end
 
@@ -669,11 +735,15 @@ function Ota.startUpdateProcess(plugin_path_from_main)
 
             logger.info("Annas:Ota.startUpdateProcess - Temporary download path: " .. temp_zip_path)
 
-            local download_result = Ota.downloadUpdate(download_url, temp_zip_path)
+            local download_headers = package_info.use_api_asset
+                and build_github_headers("application/octet-stream")
+                or build_github_headers()
+
+            local download_result = Ota.downloadUpdate(download_url, temp_zip_path, download_headers)
 
             if download_result.error or not download_result.success then
                 logger.err("Annas:Ota.startUpdateProcess - Download failed: " .. (download_result.error or "Unknown error"))
-                _show_ota_final_message(T("Download failed. Please try again later."), true)
+                _show_ota_final_message(T("Download failed. Check OTA repository settings, token access, and internet connectivity."), true)
                 if util.fileExists(temp_zip_path) then
                     os.remove(temp_zip_path)
                 end
