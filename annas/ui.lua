@@ -458,7 +458,7 @@ function Ui.createBookMenuItem(book_data, parent_zlibrary_instance)
     }
 end
 
-function Ui.createSearchResultsMenu(parent_ui_ref, query_string, initial_menu_items, on_goto_page_handler)
+function Ui.createSearchResultsMenu(parent_ui_ref, query_string, initial_menu_items)
     local search_order_name = Config.getSearchOrderName()
     local menu = Menu:new{
         title = _colon_concat(T("Search Results"), query_string),
@@ -467,7 +467,6 @@ function Ui.createSearchResultsMenu(parent_ui_ref, query_string, initial_menu_it
         parent = parent_ui_ref,
         items_per_page = 10,
         show_captions = true,
-        onGotoPage = on_goto_page_handler,
         is_popout = false,
         is_borderless = true,
         title_bar_fm_style = true,

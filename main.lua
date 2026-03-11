@@ -88,28 +88,44 @@ function Annas:performSearch(query)
         return
     end
 
-    local function attemptSearch()
-        local res = scraper(query)
+    local function runSearch(loading_text)
+        local loading_msg = Ui.showLoadingMessage(loading_text)
 
-        local loading_msg = Ui.showLoadingMessage(T("Searching for \"") .. query .. "\"...")
-
-        if #res == 0 then
-            Ui.closeMessage(loading_msg)
-            Ui.showInfoMessage(T("No results found for \"") .. query .. "\".")
-            return
+        local function task_search()
+            local results, err = scraper(query)
+            if not results then
+                error(err or T("Search failed. Please try again later."))
+            end
+            return results
         end
 
-        Ui.closeMessage(loading_msg)
-        logger.info(string.format("Annas:performSearch - Fetch successful. Results: %d", #res))
-        self.current_search_query = query
-        self.all_search_results_data = res
+        local function on_success_search(results)
+            if #results == 0 then
+                Ui.showInfoMessage(T("No results found for \"") .. query .. "\".")
+                return
+            end
 
-        UIManager:nextTick(function()
-            self:displaySearchResults(self.all_search_results_data, self.current_search_query)
-        end)
+            logger.info(string.format("Annas:performSearch - Fetch successful. Results: %d", #results))
+            self.current_search_query = query
+            self.all_search_results_data = results
+
+            UIManager:nextTick(function()
+                self:displaySearchResults(self.all_search_results_data, self.current_search_query)
+            end)
+        end
+
+        local function on_error_search(err_msg)
+            logger.warn(string.format("Annas:performSearch - Search failed: %s", tostring(err_msg)))
+            Ui.showRetryErrorDialog(err_msg, T("Search"), function()
+                runSearch(T("Retrying search..."))
+            end, function()
+            end, loading_msg)
+        end
+
+        AsyncHelper.run(task_search, on_success_search, on_error_search, loading_msg)
     end
 
-    attemptSearch()
+    runSearch(T("Searching for \"") .. query .. "\"...")
 end
 
 function Annas:displaySearchResults(initial_book_data_list, query_string)
@@ -131,15 +147,7 @@ function Annas:displaySearchResults(initial_book_data_list, query_string)
         self.active_results_menu = nil
     end
 
-    local function on_goto_page_handler(menu_instance, new_page_number)
-        menu_instance.prev_focused_path = nil
-        menu_instance.page = new_page_number
-
-        menu_instance:updateItems(1, true)
-        return true
-    end
-
-    self.active_results_menu = Ui.createSearchResultsMenu(self.ui, query_string, menu_items, on_goto_page_handler)
+    self.active_results_menu = Ui.createSearchResultsMenu(self.ui, query_string, menu_items)
 end
 
 function Annas:downloadBook(book)
@@ -186,45 +194,42 @@ function Annas:downloadBook(book)
         local loading_msg = Ui.showLoadingMessage(T("Downloading, please wait …"))
 
         local function task_download()
-            return download_book(book, target_dir)
+            local downloaded_file, err = download_book(book, target_dir)
+            if not downloaded_file then
+                error(err or T("Download failed. Please try again later."))
+            end
+            return downloaded_file
         end
 
-        local function on_success_download(api_result)
-            Ui.closeMessage(loading_msg)
-            if not string.find(api_result, 'Failed,', 1, true)  then
-                local has_wifi_toggle = Device:hasWifiToggle()
-                local default_turn_off_wifi = Config.getTurnOffWifiAfterDownload()
+        local function on_success_download(downloaded_file)
+            local has_wifi_toggle = Device:hasWifiToggle()
+            local default_turn_off_wifi = Config.getTurnOffWifiAfterDownload()
 
-                Ui.confirmOpenBook(api_result, has_wifi_toggle, default_turn_off_wifi, function(should_turn_off_wifi)
-                    if should_turn_off_wifi then
-                        NetworkMgr:disableWifi(function()
-                            logger.info("Annas:downloadBook - Wi-Fi disabled after download as requested by user")
-                        end)
-                    end
-
-                    if ReaderUI then
-                        logger.info("Annas:downloadBook - Cleaning up dialogs before opening reader")
-                        self.dialog_manager:closeAllDialogs()
-                        ReaderUI:showReader(api_result)
-                    else
-                        Ui.showErrorMessage(T("Could not open reader UI."))
-                        logger.warn("Annas:downloadBook - ReaderUI not available.")
-                    end
-                end,
-                function(should_turn_off_wifi)
-                    if should_turn_off_wifi then
-                        NetworkMgr:disableWifi(function()
-                            logger.info("Annas:downloadBook - Wi-Fi disabled after download as requested by user")
-                        end)
-                        logger.info("Annas:downloadBook - Cleaning up dialogs cause wifi is turned off")
-                        self.dialog_manager:closeAllDialogs()
-                    end
+            Ui.confirmOpenBook(downloaded_file, has_wifi_toggle, default_turn_off_wifi, function(should_turn_off_wifi)
+                if should_turn_off_wifi then
+                    NetworkMgr:disableWifi(function()
+                        logger.info("Annas:downloadBook - Wi-Fi disabled after download as requested by user")
+                    end)
                 end
-            )
-            else
-                local fail_msg = api_result
-                Ui.showErrorMessage(fail_msg)
-            end
+
+                if ReaderUI then
+                    logger.info("Annas:downloadBook - Cleaning up dialogs before opening reader")
+                    self.dialog_manager:closeAllDialogs()
+                    ReaderUI:showReader(downloaded_file)
+                else
+                    Ui.showErrorMessage(T("Could not open reader UI."))
+                    logger.warn("Annas:downloadBook - ReaderUI not available.")
+                end
+            end,
+            function(should_turn_off_wifi)
+                if should_turn_off_wifi then
+                    NetworkMgr:disableWifi(function()
+                        logger.info("Annas:downloadBook - Wi-Fi disabled after download as requested by user")
+                    end)
+                    logger.info("Annas:downloadBook - Cleaning up dialogs cause wifi is turned off")
+                    self.dialog_manager:closeAllDialogs()
+                end
+            end)
         end
 
         local function on_error_download(err_msg)

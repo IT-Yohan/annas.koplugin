@@ -65,6 +65,9 @@ msgstr ""
 msgid "Cannot create downloads directory: %s"
 msgstr ""
 
+msgid "Download mirrors could not be resolved. Your DNS or network may be blocking the source mirror."
+msgstr ""
+
 msgid "Check for updates"
 msgstr ""
 
@@ -129,6 +132,9 @@ msgid "Download HTTP Error"
 msgstr ""
 
 msgid "Download limit reached. Please try again later or check your account."
+msgstr ""
+
+msgid "Failed to save downloaded file."
 msgstr ""
 
 msgid "Download timeouts"
@@ -221,6 +227,9 @@ msgstr ""
 msgid "No internet connection detected. Please connect to the internet and try again."
 msgstr ""
 
+msgid "No supported download mirror is available for this book."
+msgstr ""
+
 msgid "No results found for \""
 msgstr ""
 
@@ -260,6 +269,9 @@ msgstr ""
 msgid "Request timed out - please check your connection and try again"
 msgstr ""
 
+msgid "Retrying search..."
+msgstr ""
+
 msgid "Reset"
 msgstr ""
 
@@ -290,7 +302,34 @@ msgstr ""
 msgid "Search Results"
 msgstr ""
 
+msgid "Search failed. Please try again later."
+msgstr ""
+
 msgid "Search timeouts"
+msgstr ""
+
+msgid "The selected mirror is returning an anti-bot or DDoS protection page instead of the file. Please try again later."
+msgstr ""
+
+msgid "This book is not available from a supported download mirror yet."
+msgstr ""
+
+msgid "Unable to reach a working Anna's Archive mirror. Please check your connection and try again."
+msgstr ""
+
+msgid "Unable to reach a working download mirror. Please check your connection and try again."
+msgstr ""
+
+msgid "Anna's Archive mirrors could not be resolved. Your DNS or network may be blocking the site. Try another DNS provider or network."
+msgstr ""
+
+msgid "Anna's Archive mirrors are returning an anti-bot or DDoS protection page. Please wait and try again later."
+msgstr ""
+
+msgid "Anna's Archive responded, but no mirror returned a usable search results page. Please try again later."
+msgstr ""
+
+msgid "No working mirror returned a usable download file for this book. Please try again later."
 msgstr ""
 
 msgid "Searching for \""
