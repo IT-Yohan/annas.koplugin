@@ -1,8 +1,10 @@
 .idea
+dist/
 scripts/
 !scripts/
 scripts/*
 !scripts/verify-env.ps1
+!scripts/package-plugin.ps1
 .DS_Store
 .vscode/
 !.vscode/

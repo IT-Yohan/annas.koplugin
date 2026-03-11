@@ -15,6 +15,61 @@ The plugin was tested on KOReader installed on a Kindle Paperwhite 11th generati
 3. Copy `annas.koplugin` to `koreader/plugins` on your device.
 4. Restart KOReader.
 
+## Build And Package
+
+There is no compile step for this plugin.
+
+KOReader loads it directly from Lua source files, so the practical "build" for local use is:
+
+1. Validate the Lua files.
+2. Package the plugin directory into a ZIP with `annas.koplugin` as the archive root.
+
+Local validation commands:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\verify-env.ps1
+lua -e "local p=io.popen('git ls-files *.lua annas/*.lua src/*.lua'); for f in p:lines() do assert(loadfile(f), 'loadfile failed: '..f) end; p:close(); print('Lua syntax validation passed')"
+```
+
+Local packaging command:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\package-plugin.ps1
+```
+
+That produces:
+
+- `dist/annas.koplugin.zip`
+
+The ZIP contains a single top-level directory named `annas.koplugin`, which is the layout KOReader expects.
+
+## Install From Source Or Local Package
+
+### Option 1: Install from source checkout
+
+1. Copy this repository folder to your device.
+2. Ensure the copied folder is named exactly `annas.koplugin`.
+3. Place it under `koreader/plugins`.
+4. Restart KOReader.
+
+### Option 2: Install from locally packaged ZIP
+
+1. Run:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\scripts\package-plugin.ps1
+   ```
+
+2. Extract `dist/annas.koplugin.zip`.
+3. Copy the extracted `annas.koplugin` directory to `koreader/plugins` on the device.
+4. Restart KOReader.
+
+### Result on device
+
+After restart, open the KOReader file browser, then go to `Search` and look for `Anna's Archive`.
+
+If `zlibrary.koplugin` is also installed, both plugins should now appear separately.
+
 ## Windows Development Setup
 
 Phase 0 uses the smallest Windows toolchain that is useful for local work on this repository:
