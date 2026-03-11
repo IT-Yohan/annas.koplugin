@@ -1,4 +1,4 @@
-# [KOReader Z-library Plugin](https://github.com/ZlibraryKO/zlibrary.koplugin)
+# [KOReader Annas Plugin](https://github.com/fischer-hub/annas.koplugin)
 
 ## Localization Files
 
@@ -16,11 +16,11 @@ l10n/
 1. **Locate PO Files**
    - Navigate to the plugin's `l10n` directory:
      ```
-     koreader/plugins/zlibrary.koplugin/l10n/{language_code}/koreader.po
+    koreader/plugins/annas.koplugin/l10n/{language_code}/koreader.po
      ```
    - Example (Japanese):
      ```
-     zlibrary.koplugin/l10n/ja/koreader.po
+    annas.koplugin/l10n/ja/koreader.po
      ```
 
 2. **Add New Language**

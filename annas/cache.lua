@@ -11,8 +11,45 @@ local Cache = {
     path = nil,
     _cache = nil,
     _has_cache = nil,
-    _dir = DataStorage:getDataDir() .. "/cache/zlibrary"
+    _dir = DataStorage:getDataDir() .. "/cache/annas",
+    _legacy_dir = DataStorage:getDataDir() .. "/cache/zlibrary",
 }
+
+local function ensureParentDir(path)
+    local dir = util.splitFilePathName(path)
+    if util.directoryExists(dir) then
+        return
+    end
+
+    util.makePath(dir)
+    if not util.directoryExists(dir) then
+        os.execute(string.format('mkdir "%s"', dir))
+    end
+end
+
+local function copyFile(source_path, target_path)
+    local source = io.open(source_path, "rb")
+    if not source then
+        return false
+    end
+
+    ensureParentDir(target_path)
+
+    local target = io.open(target_path, "wb")
+    if not target then
+        source:close()
+        return false
+    end
+
+    local chunk = source:read("*a")
+    if chunk then
+        target:write(chunk)
+    end
+
+    source:close()
+    target:close()
+    return true
+end
 
 function Cache:new(o)
     o = o or {}
@@ -38,21 +75,49 @@ function Cache:makePath(...)
     )
 end
 
+function Cache:makeLegacyPath(...)
+    local name = select('#', ...) > 0 and table.concat({...}, "_") or self.name
+    return ("%s/%s"):format(
+        self._legacy_dir,
+        md5(name)
+    )
+end
+
+function Cache:resolveExistingPath(path)
+    if util.fileExists(path) then
+        return path
+    end
+
+    local legacy_path = path:gsub(self._dir, self._legacy_dir, 1)
+    if legacy_path ~= path and util.fileExists(legacy_path) then
+        return legacy_path
+    end
+
+    return path
+end
+
+function Cache:_migrateLegacyCacheFile()
+    if util.fileExists(self.path) then
+        return
+    end
+
+    local legacy_path = self.path:gsub(self._dir, self._legacy_dir, 1)
+    if legacy_path ~= self.path and util.fileExists(legacy_path) then
+        copyFile(legacy_path, self.path)
+    end
+end
+
 -- lazy Initialization
 function Cache:_ensureInit()
     if self._cache then return end
 
     assert(self.path, "Cache.ensureInit: cache_path is undefined")
 
+    self:_migrateLegacyCacheFile()
+
     local fileExists = util.fileExists(self.path)
     if not fileExists then
-        local dir = util.splitFilePathName(self.path)
-        if not util.directoryExists(dir) then
-            util.makePath(dir)
-            if not util.directoryExists(dir) then
-                os.execute(string.format('"mkdir -p "%s"', dir))
-            end
-        end
+        ensureParentDir(self.path)
     end
 
     self._cache = LuaSettings:open(self.path)

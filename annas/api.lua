@@ -1,11 +1,11 @@
-local Config = require("zlibrary.config")
+local Config = require("annas.config")
 local util = require("util")
 local logger = require("logger")
 local json = require("json")
 local ltn12 = require("ltn12")
 local http = require("socket.http")
 local socketutil = require("socketutil")
-local T = require("zlibrary.gettext")
+local T = require("annas.gettext")
 
 local Api = {}
 
@@ -55,7 +55,7 @@ local function _transformApiBookData(api_book)
 end
 
 function Api.makeHttpRequest(options)
-    logger.dbg(string.format("Zlibrary:Api.makeHttpRequest - START - URL: %s, Method: %s", options.url, options.method or "GET"))
+    logger.dbg(string.format("Annas:Api.makeHttpRequest - START - URL: %s, Method: %s", options.url, options.method or "GET"))
 
     local response_body_table = {}
     local result = { body = nil, status_code = nil, error = nil, headers = nil }
@@ -69,10 +69,10 @@ function Api.makeHttpRequest(options)
     if options.timeout then
         if type(options.timeout) == "table" then
             socketutil:set_timeout(options.timeout[1], options.timeout[2])
-            logger.dbg(string.format("Zlibrary:Api.makeHttpRequest - Setting timeout to %s/%s seconds", options.timeout[1], options.timeout[2]))
+            logger.dbg(string.format("Annas:Api.makeHttpRequest - Setting timeout to %s/%s seconds", options.timeout[1], options.timeout[2]))
         else
             socketutil:set_timeout(options.timeout)
-            logger.dbg(string.format("Zlibrary:Api.makeHttpRequest - Setting timeout to %s seconds", options.timeout))
+            logger.dbg(string.format("Annas:Api.makeHttpRequest - Setting timeout to %s seconds", options.timeout))
         end
     end
 
@@ -85,16 +85,16 @@ function Api.makeHttpRequest(options)
         redirect = true,
     }
 
-    logger.dbg(string.format("Zlibrary:Api.makeHttpRequest - Request Params: URL: %s, Method: %s, Timeout: %s", request_params.url, request_params.method, tostring(options.timeout)))
+    logger.dbg(string.format("Annas:Api.makeHttpRequest - Request Params: URL: %s, Method: %s, Timeout: %s", request_params.url, request_params.method, tostring(options.timeout)))
 
     local req_ok, r_val, r_code, r_headers_tbl, r_status_str = pcall(http.request, request_params)
 
     if options.timeout then
         socketutil:reset_timeout()
-        logger.dbg("Zlibrary:Api.makeHttpRequest - Reset timeout to default")
+        logger.dbg("Annas:Api.makeHttpRequest - Reset timeout to default")
     end
 
-    logger.dbg(string.format("Zlibrary:Api.makeHttpRequest - pcall result: ok=%s, r_val=%s (type %s), r_code=%s (type %s), r_headers_tbl type=%s, r_status_str=%s",
+    logger.dbg(string.format("Annas:Api.makeHttpRequest - pcall result: ok=%s, r_val=%s (type %s), r_code=%s (type %s), r_headers_tbl type=%s, r_status_str=%s",
         tostring(req_ok), tostring(r_val), type(r_val), tostring(r_code), type(r_code), type(r_headers_tbl), tostring(r_status_str)))
 
     if not req_ok then
@@ -109,7 +109,7 @@ function Api.makeHttpRequest(options)
         else
             result.error = T("Network request failed") .. ": " .. error_msg
         end
-        logger.err(string.format("Zlibrary:Api.makeHttpRequest - END (pcall error) - Error: %s", result.error))
+        logger.err(string.format("Annas:Api.makeHttpRequest - END (pcall error) - Error: %s", result.error))
         return result
     end
 
@@ -130,7 +130,7 @@ function Api.makeHttpRequest(options)
         else
             result.error = T("Network connection error - please check your internet connection and try again")
         end
-        logger.err(string.format("Zlibrary:Api.makeHttpRequest - END (Invalid response code type) - Error: %s", result.error))
+        logger.err(string.format("Annas:Api.makeHttpRequest - END (Invalid response code type) - Error: %s", result.error))
         return result
     end
 
@@ -140,19 +140,19 @@ function Api.makeHttpRequest(options)
         end
     end
 
-    logger.dbg(string.format("Zlibrary:Api.makeHttpRequest - END - Status: %s, Headers found: %s, Error: %s",
+    logger.dbg(string.format("Annas:Api.makeHttpRequest - END - Status: %s, Headers found: %s, Error: %s",
         result.status_code, tostring(result.headers ~= nil), tostring(result.error)))
     return result
 end
 
 function Api.login(email, password)
-    logger.info(string.format("Zlibrary:Api.login - START"))
+    logger.info(string.format("Annas:Api.login - START"))
     local result = { user_id = nil, user_key = nil, error = nil }
 
     local rpc_url = Config.getRpcUrl()
     if not rpc_url then
         result.error = T("The Z-library server address (URL) is not set. Please configure it in the Z-library plugin settings.")
-        logger.err(string.format("Zlibrary:Api.login - END (Configuration error) - Error: %s", result.error))
+        logger.err(string.format("Annas:Api.login - END (Configuration error) - Error: %s", result.error))
         return result
     end
 
@@ -186,7 +186,7 @@ function Api.login(email, password)
 
     if http_result.error then
         result.error = http_result.error
-        logger.err(string.format("Zlibrary:Api.login - END (HTTP error) - Error: %s", result.error))
+        logger.err(string.format("Annas:Api.login - END (HTTP error) - Error: %s", result.error))
         return result
     end
 
@@ -194,7 +194,7 @@ function Api.login(email, password)
 
     if not data or type(data) ~= "table" then
         result.error = T("Login failed: Invalid response format") .. (err_msg and (". " .. err_msg) or "")
-        logger.err(string.format("Zlibrary:Api.login - END (JSON error) - Error: %s", result.error))
+        logger.err(string.format("Annas:Api.login - END (JSON error) - Error: %s", result.error))
         return result
     end
 
@@ -204,24 +204,24 @@ function Api.login(email, password)
 
     if user_id == "" or user_key == "" then
         result.error = T("Login failed") .. ": " .. (session.message or T("Credentials rejected or invalid response"))
-        logger.warn(string.format("Zlibrary:Api.login - END (Credentials error) - Error: %s", result.error))
+        logger.warn(string.format("Annas:Api.login - END (Credentials error) - Error: %s", result.error))
         return result
     end
 
     result.user_id = user_id
     result.user_key = user_key
-    logger.info(string.format("Zlibrary:Api.login - END (Success) - UserID: %s", result.user_id))
+    logger.info(string.format("Annas:Api.login - END (Success) - UserID: %s", result.user_id))
     return result
 end
 
 function Api.search(query, user_id, user_key, languages, extensions, order, page)
-    logger.info(string.format("Zlibrary:Api.search - START - Query: %s, Page: %s", query, tostring(page)))
+    logger.info(string.format("Annas:Api.search - START - Query: %s, Page: %s", query, tostring(page)))
     local result = { results = nil, total_count = nil, error = nil }
 
     local search_url = Config.getSearchUrl()
     if not search_url then
         result.error = T("The Z-library server address (URL) is not set. Please configure it in the Z-library plugin settings.")
-        logger.err(string.format("Zlibrary:Api.search - END (Configuration error) - Error: %s", result.error))
+        logger.err(string.format("Annas:Api.search - END (Configuration error) - Error: %s", result.error))
         return result
     end
 
@@ -259,7 +259,7 @@ function Api.search(query, user_id, user_key, languages, extensions, order, page
         headers["Cookie"] = string.format("remix_userid=%s; remix_userkey=%s", user_id, user_key)
     end
 
-    logger.dbg(string.format("Zlibrary:Api.search - Request URL: %s, Body: %s", search_url, body))
+    logger.dbg(string.format("Annas:Api.search - Request URL: %s, Body: %s", search_url, body))
 
     local http_result = Api.makeHttpRequest{
         url = search_url,
@@ -272,13 +272,13 @@ function Api.search(query, user_id, user_key, languages, extensions, order, page
     if http_result.error then
         result.error = http_result.error
         result.status_code = http_result.status_code
-        logger.err(string.format("Zlibrary:Api.search - END (HTTP error) - Error: %s, Status: %s", result.error, tostring(result.status_code)))
+        logger.err(string.format("Annas:Api.search - END (HTTP error) - Error: %s, Status: %s", result.error, tostring(result.status_code)))
         return result
     end
 
     if not http_result.body then
         result.error = T("No response received from server - please try again")
-        logger.err(string.format("Zlibrary:Api.search - END (Empty body) - Error: %s", result.error))
+        logger.err(string.format("Annas:Api.search - END (Empty body) - Error: %s", result.error))
         return result
     end
 
@@ -286,13 +286,13 @@ function Api.search(query, user_id, user_key, languages, extensions, order, page
 
     if not data or type(data) ~= "table" then
         result.error = T("Invalid response format from server") .. (err_msg and (": " .. err_msg) or "")
-        logger.err(string.format("Zlibrary:Api.search - END (JSON error) - Error: %s, Body: %s", result.error, http_result.body))
+        logger.err(string.format("Annas:Api.search - END (JSON error) - Error: %s, Body: %s", result.error, http_result.body))
         return result
     end
 
     if data.error then
         result.error = T("Search API error") .. ": " .. (data.error.message or data.error)
-        logger.warn(string.format("Zlibrary:Api.search - END (API error in response) - Error: %s", result.error))
+        logger.warn(string.format("Annas:Api.search - END (API error in response) - Error: %s", result.error))
         return result
     end
 
@@ -310,7 +310,7 @@ function Api.search(query, user_id, user_key, languages, extensions, order, page
             if transformed_book then
                 table.insert(transformed_books, transformed_book)
             else
-                logger.warn("Zlibrary:Api.search - Failed to transform an API book item, skipping.")
+                logger.warn("Annas:Api.search - Failed to transform an API book item, skipping.")
             end
         end
     end
@@ -321,19 +321,19 @@ function Api.search(query, user_id, user_key, languages, extensions, order, page
     elseif data.exactBooksCount then -- Fallback for exact match count
         result.total_count = tonumber(data.exactBooksCount)
     elseif #transformed_books > 0 and not result.total_count then
-        logger.warn("Zlibrary:Api.search - Total count not found in API response pagination or exactBooksCount.")
+        logger.warn("Annas:Api.search - Total count not found in API response pagination or exactBooksCount.")
     end
 
-    logger.info(string.format("Zlibrary:Api.search - END (Success) - Found %d results, Total reported: %s", #result.results, tostring(result.total_count)))
+    logger.info(string.format("Annas:Api.search - END (Success) - Found %d results, Total reported: %s", #result.results, tostring(result.total_count)))
     return result
 end
 
 function Api.downloadBook(download_url, target_filepath, user_id, user_key, referer_url)
-    logger.info(string.format("Zlibrary:Api.downloadBook - START - URL: %s, Target: %s", download_url, target_filepath))
+    logger.info(string.format("Annas:Api.downloadBook - START - URL: %s, Target: %s", download_url, target_filepath))
 
     if Config.isTestModeEnabled() then
-        logger.info("Zlibrary:Api.downloadBook - Test mode enabled, creating fake successful download")
-        logger.info(string.format("Zlibrary:Api.downloadBook - END (Test mode success) - Target: %s", target_filepath))
+        logger.info("Annas:Api.downloadBook - Test mode enabled, creating fake successful download")
+        logger.info(string.format("Annas:Api.downloadBook - END (Test mode success) - Target: %s", target_filepath))
         return { success = true, error = nil }
     end
 
@@ -341,7 +341,7 @@ function Api.downloadBook(download_url, target_filepath, user_id, user_key, refe
     local file, err_open = io.open(target_filepath, "wb")
     if not file then
         result.error = T("Failed to open target file") .. ": " .. (err_open or T("Unknown error"))
-        logger.err(string.format("Zlibrary:Api.downloadBook - END (File open error) - Error: %s", result.error))
+        logger.err(string.format("Annas:Api.downloadBook - END (File open error) - Error: %s", result.error))
         return result
     end
 
@@ -364,7 +364,7 @@ function Api.downloadBook(download_url, target_filepath, user_id, user_key, refe
     if http_result.error and not (http_result.status_code and http_result.headers) then
         result.error = http_result.error
         pcall(os.remove, target_filepath)
-        logger.err(string.format("Zlibrary:Api.downloadBook - END (Request error) - Error: %s", result.error))
+        logger.err(string.format("Annas:Api.downloadBook - END (Request error) - Error: %s", result.error))
         return result
     end
 
@@ -372,29 +372,29 @@ function Api.downloadBook(download_url, target_filepath, user_id, user_key, refe
     if content_type and string.find(string.lower(content_type), "text/html") then
         result.error = T("Download limit reached or file is an HTML page")
         pcall(os.remove, target_filepath)
-        logger.warn(string.format("Zlibrary:Api.downloadBook - END (HTML content detected) - URL: %s, Status: %s, Content-Type: %s", download_url, tostring(http_result.status_code), content_type))
+        logger.warn(string.format("Annas:Api.downloadBook - END (HTML content detected) - URL: %s, Status: %s, Content-Type: %s", download_url, tostring(http_result.status_code), content_type))
         return result
     end
 
     if http_result.error or (http_result.status_code and http_result.status_code ~= 200) then
         result.error = http_result.error or string.format("%s: %s", T("HTTP Error"), http_result.status_code)
         pcall(os.remove, target_filepath)
-        logger.err(string.format("Zlibrary:Api.downloadBook - END (Download error) - Error: %s, Status: %s", result.error, tostring(http_result.status_code)))
+        logger.err(string.format("Annas:Api.downloadBook - END (Download error) - Error: %s, Status: %s", result.error, tostring(http_result.status_code)))
         return result
     else
         result.success = true
-        logger.info(string.format("Zlibrary:Api.downloadBook - END (Success) - Target: %s", target_filepath))
+        logger.info(string.format("Annas:Api.downloadBook - END (Success) - Target: %s", target_filepath))
         return result
     end
 end
 
 function Api.downloadBookCover(download_url, target_filepath)
-    logger.info(string.format("Zlibrary:Api.downloadBookCover - START - URL: %s, Target: %s", download_url, target_filepath))
+    logger.info(string.format("Annas:Api.downloadBookCover - START - URL: %s, Target: %s", download_url, target_filepath))
     local result = { success = false, error = nil }
     local file, err_open = io.open(target_filepath, "wb")
     if not file then
         result.error = T("Failed to open target file") .. ": " .. (err_open or T("Unknown error"))
-        logger.err(string.format("Zlibrary:Api.downloadBookCover - END (File open error) - Error: %s", result.error))
+        logger.err(string.format("Annas:Api.downloadBookCover - END (File open error) - Error: %s", result.error))
         return result
     end
 
@@ -411,25 +411,25 @@ function Api.downloadBookCover(download_url, target_filepath)
     if http_result.error and not (http_result.status_code and http_result.headers) then
         result.error = http_result.error
         pcall(os.remove, target_filepath)
-        logger.err(string.format("Zlibrary:Api.downloadBookCover - END (Request error) - Error: %s", result.error))
+        logger.err(string.format("Annas:Api.downloadBookCover - END (Request error) - Error: %s", result.error))
         return result
     end
 
     if http_result.error then
         result.error = http_result.error
         pcall(os.remove, target_filepath)
-        logger.err("Zlibrary:Api.downloadBookCover - END (HTTP error from Api.makeHttpRequest) - Error: " .. result.error .. ", Status: " .. tostring(http_result.status_code))
+        logger.err("Annas:Api.downloadBookCover - END (HTTP error from Api.makeHttpRequest) - Error: " .. result.error .. ", Status: " .. tostring(http_result.status_code))
         return result
     end
 
     if http_result.status_code ~= 200 then
         result.error = string.format("%s: %s", T("Download HTTP Error"), http_result.status_code)
         pcall(os.remove, target_filepath)
-        logger.err("Zlibrary:Api.downloadBookCover - END (HTTP status error) - Error: " .. result.error)
+        logger.err("Annas:Api.downloadBookCover - END (HTTP status error) - Error: " .. result.error)
         return result
     end
 
-    logger.info("Zlibrary:Api.downloadBookCover - END (Success)")
+    logger.info("Annas:Api.downloadBookCover - END (Success)")
     result.success = true
     return result
 end

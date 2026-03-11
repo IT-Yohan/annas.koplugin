@@ -1,28 +1,95 @@
 local util = require("util")
 local logger = require("logger")
 local lfs = require("libs/libkoreader-lfs")
-local T = require("zlibrary.gettext")
+local T = require("annas.gettext")
 
 local Config = {}
 
-Config.SETTINGS_BASE_URL_KEY = "zlibrary_base_url"
-Config.SETTINGS_USERNAME_KEY = "zlibrary_username"
-Config.SETTINGS_PASSWORD_KEY = "zlibrary_password"
-Config.SETTINGS_USER_ID_KEY = "zlib_user_id"
-Config.SETTINGS_USER_KEY_KEY = "zlib_user_key"
-Config.SETTINGS_SEARCH_LANGUAGES_KEY = "zlibrary_search_languages"
-Config.SETTINGS_SEARCH_EXTENSIONS_KEY = "zlibrary_search_extensions"
-Config.SETTINGS_SEARCH_ORDERS_KEY = "zlibrary_search_order"
-Config.SETTINGS_DOWNLOAD_DIR_KEY = "zlibrary_download_dir"
-Config.SETTINGS_TURN_OFF_WIFI_AFTER_DOWNLOAD_KEY = "zlibrary_turn_off_wifi_after_download"
-Config.SETTINGS_TIMEOUT_LOGIN_KEY = "zlibrary_timeout_login"
-Config.SETTINGS_TIMEOUT_SEARCH_KEY = "zlibrary_timeout_search"
-Config.SETTINGS_TIMEOUT_BOOK_DETAILS_KEY = "zlibrary_timeout_book_details"
-Config.SETTINGS_TIMEOUT_RECOMMENDED_KEY = "zlibrary_timeout_recommended"
-Config.SETTINGS_TIMEOUT_POPULAR_KEY = "zlibrary_timeout_popular"
-Config.SETTINGS_TIMEOUT_DOWNLOAD_KEY = "zlibrary_timeout_download"
-Config.SETTINGS_TIMEOUT_COVER_KEY = "zlibrary_timeout_cover"
-Config.CREDENTIALS_FILENAME = "zlibrary_credentials.lua"
+Config.SETTINGS_BASE_URL_KEY = "annas_base_url"
+Config.SETTINGS_USERNAME_KEY = "annas_username"
+Config.SETTINGS_PASSWORD_KEY = "annas_password"
+Config.SETTINGS_USER_ID_KEY = "annas_user_id"
+Config.SETTINGS_USER_KEY_KEY = "annas_user_key"
+Config.SETTINGS_SEARCH_LANGUAGES_KEY = "annas_search_languages"
+Config.SETTINGS_SEARCH_EXTENSIONS_KEY = "annas_search_extensions"
+Config.SETTINGS_SEARCH_ORDERS_KEY = "annas_search_order"
+Config.SETTINGS_DOWNLOAD_DIR_KEY = "annas_download_dir"
+Config.SETTINGS_TURN_OFF_WIFI_AFTER_DOWNLOAD_KEY = "annas_turn_off_wifi_after_download"
+Config.SETTINGS_TIMEOUT_LOGIN_KEY = "annas_timeout_login"
+Config.SETTINGS_TIMEOUT_SEARCH_KEY = "annas_timeout_search"
+Config.SETTINGS_TIMEOUT_BOOK_DETAILS_KEY = "annas_timeout_book_details"
+Config.SETTINGS_TIMEOUT_RECOMMENDED_KEY = "annas_timeout_recommended"
+Config.SETTINGS_TIMEOUT_POPULAR_KEY = "annas_timeout_popular"
+Config.SETTINGS_TIMEOUT_DOWNLOAD_KEY = "annas_timeout_download"
+Config.SETTINGS_TIMEOUT_COVER_KEY = "annas_timeout_cover"
+Config.SETTINGS_TEST_MODE_KEY = "annas_test_mode"
+Config.CREDENTIALS_FILENAME = "annas_credentials.lua"
+Config.LEGACY_CREDENTIALS_FILENAME = "zlibrary_credentials.lua"
+
+Config.LEGACY_SETTINGS = {
+    [Config.SETTINGS_BASE_URL_KEY] = "zlibrary_base_url",
+    [Config.SETTINGS_USERNAME_KEY] = "zlibrary_username",
+    [Config.SETTINGS_PASSWORD_KEY] = "zlibrary_password",
+    [Config.SETTINGS_USER_ID_KEY] = "zlib_user_id",
+    [Config.SETTINGS_USER_KEY_KEY] = "zlib_user_key",
+    [Config.SETTINGS_SEARCH_LANGUAGES_KEY] = "zlibrary_search_languages",
+    [Config.SETTINGS_SEARCH_EXTENSIONS_KEY] = "zlibrary_search_extensions",
+    [Config.SETTINGS_SEARCH_ORDERS_KEY] = "zlibrary_search_order",
+    [Config.SETTINGS_DOWNLOAD_DIR_KEY] = "zlibrary_download_dir",
+    [Config.SETTINGS_TURN_OFF_WIFI_AFTER_DOWNLOAD_KEY] = "zlibrary_turn_off_wifi_after_download",
+    [Config.SETTINGS_TIMEOUT_LOGIN_KEY] = "zlibrary_timeout_login",
+    [Config.SETTINGS_TIMEOUT_SEARCH_KEY] = "zlibrary_timeout_search",
+    [Config.SETTINGS_TIMEOUT_BOOK_DETAILS_KEY] = "zlibrary_timeout_book_details",
+    [Config.SETTINGS_TIMEOUT_RECOMMENDED_KEY] = "zlibrary_timeout_recommended",
+    [Config.SETTINGS_TIMEOUT_POPULAR_KEY] = "zlibrary_timeout_popular",
+    [Config.SETTINGS_TIMEOUT_DOWNLOAD_KEY] = "zlibrary_timeout_download",
+    [Config.SETTINGS_TIMEOUT_COVER_KEY] = "zlibrary_timeout_cover",
+    [Config.SETTINGS_TEST_MODE_KEY] = "zlibrary_test_mode",
+}
+
+local function readRawSetting(key)
+    return G_reader_settings:readSetting(key)
+end
+
+local function loadCredentialsOverrideFile(plugin_path, filename, is_legacy)
+    local cred_file_path = plugin_path .. filename
+    if lfs.attributes(cred_file_path, "mode") ~= "file" then
+        return false
+    end
+
+    local func, err = loadfile(cred_file_path)
+    if not func then
+        logger.warn("Failed to load " .. filename .. ": " .. tostring(err))
+        return true
+    end
+
+    local success, result = pcall(func)
+    if not success or type(result) ~= "table" then
+        logger.warn("Failed to execute or get table from " .. filename .. ": " .. tostring(result))
+        return true
+    end
+
+    if is_legacy then
+        logger.warn("Using deprecated override file " .. filename .. ". Rename it to " .. Config.CREDENTIALS_FILENAME .. " to keep the Annas namespace isolated.")
+    else
+        logger.info("Successfully loaded credentials from " .. filename)
+    end
+
+    if result.baseUrl then
+        Config.saveSetting(Config.SETTINGS_BASE_URL_KEY, result.baseUrl)
+    end
+    if result.username then
+        Config.saveSetting(Config.SETTINGS_USERNAME_KEY, result.username)
+    end
+    if result.email then
+        Config.saveSetting(Config.SETTINGS_USERNAME_KEY, result.email)
+    end
+    if result.password then
+        Config.saveSetting(Config.SETTINGS_PASSWORD_KEY, result.password)
+    end
+
+    return true
+end
 
 Config.DEFAULT_DOWNLOAD_DIR_FALLBACK = G_reader_settings:readSetting("home_dir")
              or require("apps/filemanager/filemanagerutil").getDefaultDir()
@@ -38,38 +105,15 @@ Config.TIMEOUT_DOWNLOAD = { 15, -1 }    -- Book download operations (infinite to
 Config.TIMEOUT_COVER = { 5, 15 }        -- Cover image operations
 
 function Config.loadCredentialsFromFile(plugin_path)
-    local cred_file_path = plugin_path .. Config.CREDENTIALS_FILENAME
-    if lfs.attributes(cred_file_path, "mode") == "file" then
-        local func, err = loadfile(cred_file_path)
-        if func then
-            local success, result = pcall(func)
-            if success and type(result) == "table" then
-                logger.info("Successfully loaded credentials from " .. Config.CREDENTIALS_FILENAME)
-                if result.baseUrl then
-                    Config.saveSetting(Config.SETTINGS_BASE_URL_KEY, result.baseUrl)
-                    logger.info("Overriding Base URL from " .. Config.CREDENTIALS_FILENAME)
-                end
-                if result.username then
-                    Config.saveSetting(Config.SETTINGS_USERNAME_KEY, result.username)
-                    logger.info("Overriding Username from " .. Config.CREDENTIALS_FILENAME)
-                end
-                if result.email then
-                    Config.saveSetting(Config.SETTINGS_USERNAME_KEY, result.email)
-                    logger.info("Overriding Username from " .. Config.CREDENTIALS_FILENAME)
-                end
-                if result.password then
-                    Config.saveSetting(Config.SETTINGS_PASSWORD_KEY, result.password)
-                    logger.info("Overriding Password from " .. Config.CREDENTIALS_FILENAME)
-                end
-            else
-                logger.warn("Failed to execute or get table from " .. Config.CREDENTIALS_FILENAME .. ": " .. tostring(result))
-            end
-        else
-            logger.warn("Failed to load " .. Config.CREDENTIALS_FILENAME .. ": " .. tostring(err))
-        end
-    else
-        logger.info(Config.CREDENTIALS_FILENAME .. " not found. Using UI settings if available.")
+    if loadCredentialsOverrideFile(plugin_path, Config.CREDENTIALS_FILENAME, false) then
+        return
     end
+
+    if loadCredentialsOverrideFile(plugin_path, Config.LEGACY_CREDENTIALS_FILENAME, true) then
+        return
+    end
+
+    logger.info(Config.CREDENTIALS_FILENAME .. " not found. Using UI settings if available.")
 end
 
 Config.SUPPORTED_LANGUAGES = {
@@ -218,7 +262,28 @@ function Config.getMostPopularBooksUrl()
 end
 
 function Config.getSetting(key, default)
-    return G_reader_settings:readSetting(key) or default
+    local value = readRawSetting(key)
+    if value ~= nil then
+        return value
+    end
+
+    local legacy_key = Config.LEGACY_SETTINGS[key]
+    if legacy_key then
+        local legacy_value = readRawSetting(legacy_key)
+        if legacy_value ~= nil then
+            Config.saveSetting(key, legacy_value)
+            logger.info(string.format("Annas: migrated legacy setting %s to %s", legacy_key, key))
+            return legacy_value
+        end
+    end
+
+    return default
+end
+
+function Config.migrateLegacySettings()
+    for key in pairs(Config.LEGACY_SETTINGS) do
+        Config.getSetting(key)
+    end
 end
 
 function Config.saveSetting(key, value)
@@ -298,11 +363,11 @@ function Config.setTurnOffWifiAfterDownload(turn_off)
 end
 
 function Config.isTestModeEnabled()
-    return Config.getSetting("zlibrary_test_mode", false)
+    return Config.getSetting(Config.SETTINGS_TEST_MODE_KEY, false)
 end
 
 function Config.setTestMode(enabled)
-    Config.saveSetting("zlibrary_test_mode", enabled)
+    Config.saveSetting(Config.SETTINGS_TEST_MODE_KEY, enabled)
 end
 
 -- Timeout configuration functions

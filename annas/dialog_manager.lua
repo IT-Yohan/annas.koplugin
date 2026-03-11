@@ -1,5 +1,5 @@
 --[[--
-@module zlibrary.dialog_manager
+@module annas.dialog_manager
 
 Dialog tracking and cleanup manager for the Z-library plugin.
 Handles automatic tracking of open dialogs and ensures proper cleanup

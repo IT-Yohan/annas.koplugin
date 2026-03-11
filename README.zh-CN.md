@@ -32,7 +32,7 @@
 ## 安装方法
 
 1.  下载最新版本的插件发布包。
-2.  将 `plugins/zlibrary.koplugin` 目录复制到设备上的 `koreader/plugins` 文件夹中。
+2.  将 `plugins/annas.koplugin` 目录复制到设备上的 `koreader/plugins` 文件夹中。
 3.  重启 KOReader。
 
 ## 配置方法
@@ -50,11 +50,11 @@
 
 **2. 通过凭据文件（高级方式）：**
 
-若你希望进行更永久或自动化的设置，可在 `zlibrary.koplugin` 目录的根目录（例如 `koreader/plugins/zlibrary.koplugin/zlibrary_credentials.lua`）创建一个名为 `zlibrary_credentials.lua` 的文件。
+若你希望进行更永久或自动化的设置，可在 `annas.koplugin` 目录的根目录（例如 `koreader/plugins/annas.koplugin/annas_credentials.lua`）创建一个名为 `annas_credentials.lua` 的文件。
 
 该文件允许你覆盖 UI 中设置的凭据。如果此文件存在并格式正确，插件将使用此文件中的值。
 
-创建 `zlibrary_credentials.lua` 文件，内容如下，取消注释并填写你想使用的具体信息：
+创建 `annas_credentials.lua` 文件，内容如下，取消注释并填写你想使用的具体信息：
 
 ```lua
 -- 此文件允许你覆盖 Z-library 的登录凭据。
@@ -67,7 +67,7 @@ return {
     -- password = "your_password",
 }
 ```
-**注意：** 如果存在 `zlibrary_credentials.lua` 文件，其中设置的凭据将始终优先于通过 UI 设置的凭据。插件在启动时加载这些设置。
+**注意：** 如果存在 `annas_credentials.lua` 文件，其中设置的凭据将始终优先于通过 UI 设置的凭据。插件在启动时加载这些设置。
 
 ## 设置手势（可选）
 

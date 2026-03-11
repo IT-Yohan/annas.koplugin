@@ -2,17 +2,17 @@ local UIManager = require("ui/uimanager")
 local InfoMessage = require("ui/widget/infomessage")
 local ConfirmBox = require("ui/widget/confirmbox")
 local TextViewer = require("ui/widget/textviewer")
-local T = require("zlibrary.gettext")
+local T = require("annas.gettext")
 local DownloadMgr = require("ui/downloadmgr")
 local InputDialog = require("ui/widget/inputdialog")
 local ButtonDialog = require("ui/widget/buttondialog")
-local Menu = require("zlibrary.menu")
+local Menu = require("annas.menu")
 local util = require("util")
 local logger = require("logger")
-local Config = require("zlibrary.config")
-local Api = require("zlibrary.api")
-local Ota = require("zlibrary.ota")
-local AsyncHelper = require("zlibrary.async_helper")
+local Config = require("annas.config")
+local Api = require("annas.api")
+local Ota = require("annas.ota")
+local AsyncHelper = require("annas.async_helper")
 require('src.scraper')
 require('src.update')
 local Ui = {}
@@ -146,7 +146,7 @@ function Ui.showSettingsDialog()
         full_source_path = full_source_path:sub(2)
     end
     local foo, _ = util.splitFilePathName(full_source_path):gsub("/+", "/")
-    local plugin_path, _ = foo:gsub("/zlibrary/", "")
+    local plugin_path, _ = foo:gsub("[\\/]annas[\\/]", "")
 
     dialog = ButtonDialog:new{
         title = T("Settings"),
@@ -168,7 +168,7 @@ function Ui.showSettingsDialog()
                 if plugin_path then
                     Ota.startUpdateProcess(plugin_path)
                 else
-                    logger.err("ZLibrary: Plugin path not available for OTA update.")
+                    logger.err("Annas: Plugin path not available for OTA update.")
                     Ui.showErrorMessage(T("Error: Plugin path not found. Cannot check for updates."))
                 end
             end,
@@ -201,7 +201,7 @@ function Ui.showSettingsDialog()
                     end
 
                 else
-                    logger.err("ZLibrary: Plugin path not available for OTA update.")
+                    logger.err("Annas: Plugin path not available for OTA update.")
                     Ui.showErrorMessage(T("Error: Plugin path not found. Cannot check for updates."))
                 end
             end,]]--
@@ -294,7 +294,7 @@ local function _showMultiSelectionDialog(parent_ui, title, setting_key, options_
                     Ui.showInfoMessage(string.format(T("%d items selected for %s."), err, title))
                 end
             else
-                logger.err("Zlibrary:Ui._editConfigOptionsDialog - Error during onClose for %s: %s", title, tostring(err))
+                logger.err("Annas:Ui._editConfigOptionsDialog - Error during onClose for %s: %s", title, tostring(err))
                 Ui.showInfoMessage(string.format(T("Filter cleared for %s."), title))
             end
         end,

@@ -1,5 +1,5 @@
-local Config = require("zlibrary.config")
-local Api = require('zlibrary.api')
+local Config = require("annas.config")
+local Api = require('annas.api')
 
 -- Cache configuration
 local CACHE_FILE = "annas_domains_cache.txt"
