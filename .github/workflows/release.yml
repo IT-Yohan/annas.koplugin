@@ -102,11 +102,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          TARGET_SHA=$(git rev-parse HEAD)
           gh release create "${{ steps.bump_version.outputs.tag }}" \
             ./annas.koplugin.zip \
             --title "${{ steps.bump_version.outputs.tag }}" \
             --notes "Automated release for commit ${{ github.sha }}" \
-            --target HEAD
+            --target "$TARGET_SHA"
         shell: bash
 
 
