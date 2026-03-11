@@ -18,13 +18,11 @@ local Cache = {
 local function ensureParentDir(path)
     local dir = util.splitFilePathName(path)
     if util.directoryExists(dir) then
-        return
+        return true
     end
 
     util.makePath(dir)
-    if not util.directoryExists(dir) then
-        os.execute(string.format('mkdir "%s"', dir))
-    end
+    return util.directoryExists(dir)
 end
 
 local function copyFile(source_path, target_path)
@@ -33,7 +31,10 @@ local function copyFile(source_path, target_path)
         return false
     end
 
-    ensureParentDir(target_path)
+    if not ensureParentDir(target_path) then
+        source:close()
+        return false
+    end
 
     local target = io.open(target_path, "wb")
     if not target then

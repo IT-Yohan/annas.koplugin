@@ -29,6 +29,8 @@ local ANTI_BOT_MARKERS = {
     "/cdn-cgi/challenge-platform",
     "please enable javascript",
 }
+local IS_WINDOWS = package.config:sub(1, 1) == "\\"
+local COMMAND_EXISTS_CACHE = {}
 
 local function ensure_cache_dir()
     if util.directoryExists(CACHE_DIR) then
@@ -290,21 +292,49 @@ local function resolve_timeout_seconds(timeout)
     return 20
 end
 
+local function command_succeeded(ok, exit_type, exit_code)
+    if ok == true then
+        return true
+    end
+
+    if type(ok) == "number" then
+        return ok == 0
+    end
+
+    if type(exit_code) == "number" then
+        return exit_code == 0
+    end
+
+    return false
+end
+
 local function command_exists(cmd)
-    local probes = {
-        string.format('where %s >NUL 2>NUL', cmd),
-        string.format('command -v %s >/dev/null 2>&1', cmd),
-        string.format('which %s >/dev/null 2>&1', cmd),
-    }
+    if COMMAND_EXISTS_CACHE[cmd] ~= nil then
+        return COMMAND_EXISTS_CACHE[cmd]
+    end
+
+    local probes = {}
+    if IS_WINDOWS then
+        table.insert(probes, string.format('where /Q %s >NUL 2>NUL', cmd))
+    else
+        table.insert(probes, string.format('command -v %s >/dev/null 2>&1', cmd))
+        table.insert(probes, string.format('which %s >/dev/null 2>&1', cmd))
+    end
 
     for _, probe in ipairs(probes) do
-        local ok = os.execute(probe)
-        if ok == true or ok == 0 then
+        local ok, exit_type, exit_code = os.execute(probe)
+        if command_succeeded(ok, exit_type, exit_code) then
+            COMMAND_EXISTS_CACHE[cmd] = true
             return true
         end
     end
 
+    COMMAND_EXISTS_CACHE[cmd] = false
     return false
+end
+
+local function command_close_succeeded(ok, exit_type, exit_code)
+    return command_succeeded(ok, exit_type, exit_code)
 end
 
 local function classify_transport_error(detail)
@@ -364,88 +394,6 @@ local function detect_anti_bot_response(payload)
     return false
 end
 
-local function fetch_with_lua_socket(url)
-    logger.dbg("Annas:scraper - Trying LuaSocket request for " .. url)
-
-    local socket_ok = pcall(require, "socket")
-    local http_ok, http = pcall(require, "socket.http")
-    local ltn12_ok, ltn12 = pcall(require, "ltn12")
-
-    if not (socket_ok and http_ok and ltn12_ok) then
-        return "no_socket", nil, "LuaSocket not available"
-    end
-
-    local response_body = {}
-    local res, code, _, status = http.request{
-        url = url,
-        method = "GET",
-        headers = {
-            ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            ["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        },
-        sink = ltn12.sink.table(response_body),
-        redirect = true,
-    }
-
-    if res and code == 200 then
-        local body = table.concat(response_body)
-        logger.dbg(string.format("Annas:scraper - LuaSocket request succeeded (%d bytes)", #body))
-        return "success", body
-    end
-
-    local detail = tostring(status or code or "LuaSocket request failed")
-    logger.dbg("Annas:scraper - LuaSocket request failed: " .. detail)
-    return classify_transport_error(detail), nil, detail
-end
-
-local function fetch_with_external_command(url, timeout)
-    logger.dbg("Annas:scraper - Trying external HTTP command for " .. url)
-    local max_time = resolve_timeout_seconds(timeout)
-
-    if command_exists("curl") then
-        local handle = io.popen(string.format('curl -L -sS --max-time %d "%s" 2>&1', max_time, url))
-        if handle then
-            local result = handle:read("*a") or ""
-            local success = handle:close()
-            if success and result ~= "" then
-                logger.dbg(string.format("Annas:scraper - curl succeeded (%d bytes)", #result))
-                return "success", result
-            end
-
-            local detail = result ~= "" and result or "curl request failed"
-            logger.dbg("Annas:scraper - curl failed: " .. detail)
-            return classify_transport_error(detail), nil, detail
-        end
-    end
-
-    if command_exists("wget") then
-        local temp_file = os.tmpname()
-        local command = string.format('wget -q -O "%s" --timeout=%d "%s" 2>&1', temp_file, max_time, url)
-        local handle = io.popen(command)
-        if handle then
-            local stderr = handle:read("*a") or ""
-            local success = handle:close()
-            local file = io.open(temp_file, "rb")
-            if file then
-                local result = file:read("*a") or ""
-                file:close()
-                pcall(os.remove, temp_file)
-                if success and result ~= "" then
-                    logger.dbg(string.format("Annas:scraper - wget succeeded (%d bytes)", #result))
-                    return "success", result
-                end
-            end
-
-            pcall(os.remove, temp_file)
-            local detail = stderr ~= "" and stderr or "wget request failed"
-            logger.dbg("Annas:scraper - wget failed: " .. detail)
-            return classify_transport_error(detail), nil, detail
-        end
-    end
-
-    return "no_external_command", nil, "curl/wget not available"
-end
-
 local function fetch_with_api(url, timeout)
     logger.dbg("Annas:scraper - Trying Api.makeHttpRequest for " .. url)
     local hostname = url:match("://([^/]+)")
@@ -494,6 +442,88 @@ local function fetch_with_api(url, timeout)
     end
 
     return "network_error", nil, "Api.makeHttpRequest failed"
+end
+
+local function fetch_with_lua_socket(url)
+    logger.dbg("Annas:scraper - Trying LuaSocket request for " .. url)
+
+    local socket_ok = pcall(require, "socket")
+    local http_ok, http = pcall(require, "socket.http")
+    local ltn12_ok, ltn12 = pcall(require, "ltn12")
+
+    if not (socket_ok and http_ok and ltn12_ok) then
+        return "no_socket", nil, "LuaSocket not available"
+    end
+
+    local response_body = {}
+    local res, code, _, status = http.request{
+        url = url,
+        method = "GET",
+        headers = {
+            ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            ["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+        sink = ltn12.sink.table(response_body),
+        redirect = true,
+    }
+
+    if res and code == 200 then
+        local body = table.concat(response_body)
+        logger.dbg(string.format("Annas:scraper - LuaSocket request succeeded (%d bytes)", #body))
+        return "success", body
+    end
+
+    local detail = tostring(status or code or "LuaSocket request failed")
+    logger.dbg("Annas:scraper - LuaSocket request failed: " .. detail)
+    return classify_transport_error(detail), nil, detail
+end
+
+local function fetch_with_external_command(url, timeout)
+    logger.dbg("Annas:scraper - Trying external HTTP fallback for " .. url)
+    local max_time = resolve_timeout_seconds(timeout)
+
+    if command_exists("curl") then
+        local handle = io.popen(string.format('curl -L -sS --max-time %d "%s" 2>&1', max_time, url))
+        if handle then
+            local result = handle:read("*a") or ""
+            local ok, exit_type, exit_code = handle:close()
+            if command_close_succeeded(ok, exit_type, exit_code) and result ~= "" then
+                logger.dbg(string.format("Annas:scraper - curl fallback succeeded (%d bytes)", #result))
+                return "success", result
+            end
+
+            local detail = result ~= "" and result or "curl request failed"
+            logger.dbg("Annas:scraper - curl fallback failed: " .. detail)
+            return classify_transport_error(detail), nil, detail
+        end
+    end
+
+    if command_exists("wget") then
+        local temp_file = os.tmpname()
+        local command = string.format('wget -q -O "%s" --timeout=%d "%s" 2>&1', temp_file, max_time, url)
+        local handle = io.popen(command)
+        if handle then
+            local stderr = handle:read("*a") or ""
+            local ok, exit_type, exit_code = handle:close()
+            local file = io.open(temp_file, "rb")
+            if file then
+                local result = file:read("*a") or ""
+                file:close()
+                pcall(os.remove, temp_file)
+                if command_close_succeeded(ok, exit_type, exit_code) and result ~= "" then
+                    logger.dbg(string.format("Annas:scraper - wget fallback succeeded (%d bytes)", #result))
+                    return "success", result
+                end
+            end
+
+            pcall(os.remove, temp_file)
+            local detail = stderr ~= "" and stderr or "wget request failed"
+            logger.dbg("Annas:scraper - wget fallback failed: " .. detail)
+            return classify_transport_error(detail), nil, detail
+        end
+    end
+
+    return "no_external_command", nil, "curl/wget not available"
 end
 
 local function new_failure_stats()
@@ -642,9 +672,9 @@ function check_url(url, timeout)
 
     local failures = {}
     local methods = {
-        fetch_with_external_command,
-        fetch_with_lua_socket,
         fetch_with_api,
+        fetch_with_lua_socket,
+        fetch_with_external_command,
     }
 
     for _, fetcher in ipairs(methods) do

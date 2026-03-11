@@ -17,6 +17,284 @@ local GITHUB_REPO = "fischer-hub/annas.koplugin"
 local LATEST_RELEASE_URL = "https://api.github.com/repos/" .. GITHUB_REPO .. "/releases/latest"
 
 local current_ota_status_widget = nil
+local IS_WINDOWS = package.config:sub(1, 1) == "\\"
+
+local function normalize_path(path)
+    local normalized = tostring(path or ""):gsub("\\", "/"):gsub("/+", "/")
+    if #normalized > 1 then
+        normalized = normalized:gsub("/$", "")
+    end
+    return normalized
+end
+
+local function join_path(...)
+    local parts = {}
+    for i = 1, select("#", ...) do
+        local part = select(i, ...)
+        if part and part ~= "" then
+            table.insert(parts, tostring(part))
+        end
+    end
+    return normalize_path(table.concat(parts, "/"))
+end
+
+local function dirname(path)
+    return normalize_path(util.splitFilePathName(normalize_path(path)))
+end
+
+local function basename(path)
+    return normalize_path(path):match("([^/]+)$")
+end
+
+local function command_succeeded(ok, exit_type, exit_code)
+    if ok == true then
+        return true
+    end
+
+    if type(ok) == "number" then
+        return ok == 0
+    end
+
+    if type(exit_code) == "number" then
+        return exit_code == 0
+    end
+
+    return false
+end
+
+local function command_exists(cmd)
+    local probes = {}
+    if IS_WINDOWS then
+        table.insert(probes, string.format('where /Q %s >NUL 2>NUL', cmd))
+    else
+        table.insert(probes, string.format('command -v %s >/dev/null 2>&1', cmd))
+        table.insert(probes, string.format('which %s >/dev/null 2>&1', cmd))
+    end
+
+    for _, probe in ipairs(probes) do
+        local ok, exit_type, exit_code = os.execute(probe)
+        if command_succeeded(ok, exit_type, exit_code) then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function ensure_directory(path)
+    if util.directoryExists(path) then
+        return true
+    end
+
+    util.makePath(path)
+    return util.directoryExists(path)
+end
+
+local function copy_file(source_path, target_path)
+    local source, source_err = io.open(source_path, "rb")
+    if not source then
+        return false, source_err
+    end
+
+    if not ensure_directory(dirname(target_path)) then
+        source:close()
+        return false, "could not create target directory"
+    end
+
+    local target, target_err = io.open(target_path, "wb")
+    if not target then
+        source:close()
+        return false, target_err
+    end
+
+    while true do
+        local chunk = source:read(65536)
+        if not chunk then
+            break
+        end
+
+        local ok, write_err = target:write(chunk)
+        if not ok then
+            source:close()
+            target:close()
+            return false, write_err
+        end
+    end
+
+    source:close()
+    target:close()
+    return true
+end
+
+local function remove_tree(path)
+    local mode = lfs.attributes(path, "mode")
+    if not mode then
+        return true
+    end
+
+    if mode == "file" then
+        local ok, err = os.remove(path)
+        return ok ~= nil, err
+    end
+
+    if mode ~= "directory" then
+        return false, "unsupported node type: " .. tostring(mode)
+    end
+
+    for entry in lfs.dir(path) do
+        if entry ~= "." and entry ~= ".." then
+            local ok, err = remove_tree(join_path(path, entry))
+            if not ok then
+                return false, err
+            end
+        end
+    end
+
+    local ok, err = lfs.rmdir(path)
+    return ok ~= nil, err
+end
+
+local function copy_tree(source_dir, target_dir)
+    if not ensure_directory(target_dir) then
+        return false, "could not create target directory"
+    end
+
+    for entry in lfs.dir(source_dir) do
+        if entry ~= "." and entry ~= ".." then
+            local source_path = join_path(source_dir, entry)
+            local target_path = join_path(target_dir, entry)
+            local mode = lfs.attributes(source_path, "mode")
+
+            if mode == "directory" then
+                local ok, err = copy_tree(source_path, target_path)
+                if not ok then
+                    return false, err
+                end
+            elseif mode == "file" then
+                local ok, err = copy_file(source_path, target_path)
+                if not ok then
+                    return false, err
+                end
+            else
+                return false, "unsupported node type: " .. tostring(mode)
+            end
+        end
+    end
+
+    return true
+end
+
+local function prepare_clean_directory(path)
+    local mode = lfs.attributes(path, "mode")
+    if mode == "directory" then
+        local ok, err = remove_tree(path)
+        if not ok then
+            return false, err
+        end
+    elseif mode == "file" then
+        local ok, err = os.remove(path)
+        if not ok then
+            return false, err
+        end
+    end
+
+    if not ensure_directory(path) then
+        return false, "could not create directory"
+    end
+
+    return true
+end
+
+local function find_extracted_plugin_root(extract_dir, plugin_name)
+    if util.fileExists(join_path(extract_dir, "_meta.lua")) then
+        return extract_dir
+    end
+
+    local fallback_dir = nil
+    for entry in lfs.dir(extract_dir) do
+        if entry ~= "." and entry ~= ".." then
+            local path = join_path(extract_dir, entry)
+            if lfs.attributes(path, "mode") == "directory" then
+                if basename(path) == plugin_name and util.fileExists(join_path(path, "_meta.lua")) then
+                    return path
+                end
+
+                if util.fileExists(join_path(path, "_meta.lua")) then
+                    fallback_dir = path
+                end
+            end
+        end
+    end
+
+    return fallback_dir
+end
+
+local function extract_zip_with_shell(zip_filepath, destination_dir)
+    local extractors = {
+        {
+            available = function()
+                return command_exists("unzip")
+            end,
+            build = function(zip_path, dest_path)
+                return string.format('unzip -o "%s" -d "%s"', zip_path, dest_path)
+            end,
+        },
+        {
+            available = function()
+                return command_exists("tar")
+            end,
+            build = function(zip_path, dest_path)
+                return string.format('tar -xf "%s" -C "%s"', zip_path, dest_path)
+            end,
+        },
+    }
+
+    for _, extractor in ipairs(extractors) do
+        if extractor.available() then
+            local command = extractor.build(zip_filepath, destination_dir)
+            logger.info("Annas:Ota.installUpdate - Extracting archive with: " .. command)
+            local ok, exit_type, exit_code = os.execute(command)
+            if command_succeeded(ok, exit_type, exit_code) then
+                return true
+            end
+
+            return false, string.format("archive extraction failed (exit code: %s)", tostring(exit_code or ok))
+        end
+    end
+
+    return false, "no supported archive extractor is available"
+end
+
+local function choose_release_package(release_info)
+    if type(release_info.assets) == "table" then
+        for _, asset in ipairs(release_info.assets) do
+            if asset.name == "annas.koplugin.zip" and asset.browser_download_url then
+                return {
+                    url = asset.browser_download_url,
+                    name = asset.name,
+                }
+            end
+        end
+
+        for _, asset in ipairs(release_info.assets) do
+            if type(asset.name) == "string" and asset.name:match("%.zip$") and asset.browser_download_url then
+                return {
+                    url = asset.browser_download_url,
+                    name = asset.name,
+                }
+            end
+        end
+    end
+
+    if release_info.zipball_url then
+        return {
+            url = release_info.zipball_url,
+            name = "annas_plugin_update.zip",
+        }
+    end
+
+    return nil
+end
 
 local function _close_current_ota_status_widget()
     if current_ota_status_widget then
@@ -129,7 +407,6 @@ function Ota.fetchLatestReleaseInfo()
     end
 
     logger.info("Annas:Ota.fetchLatestReleaseInfo - END (Success)")
-    print(#data)
     result.release_info = data
     return result
 end
@@ -178,8 +455,22 @@ end
 function Ota.installUpdate(zip_filepath, plugin_base_path)
     logger.info("Annas:Ota.installUpdate - START - File: " .. zip_filepath .. " Target Path: " .. plugin_base_path)
 
-    if not plugin_base_path or not util.directoryExists(plugin_base_path) then
+    local target_plugin_path = normalize_path(plugin_base_path)
+    local plugin_parent_dir = dirname(target_plugin_path)
+    local plugin_name = basename(target_plugin_path)
+    local ota_cache_dir = join_path(DataStorage:getDataDir(), "cache", "annas", "ota")
+    local extract_dir = join_path(ota_cache_dir, "extract")
+    local backup_dir = join_path(plugin_parent_dir, plugin_name .. ".ota-backup")
+
+    if not plugin_base_path or not util.directoryExists(target_plugin_path) then
         local err_msg = "Invalid or missing plugin base path for installation: " .. tostring(plugin_base_path)
+        logger.err("Annas:Ota.installUpdate - " .. err_msg)
+        _show_ota_final_message(T("Update failed: Could not determine where to install the plugin."), true)
+        return { error = err_msg }
+    end
+
+    if not plugin_parent_dir or plugin_parent_dir == "" or not util.directoryExists(plugin_parent_dir) then
+        local err_msg = "Invalid plugin parent directory for installation: " .. tostring(plugin_parent_dir)
         logger.err("Annas:Ota.installUpdate - " .. err_msg)
         _show_ota_final_message(T("Update failed: Could not determine where to install the plugin."), true)
         return { error = err_msg }
@@ -187,48 +478,73 @@ function Ota.installUpdate(zip_filepath, plugin_base_path)
 
     _show_ota_status_loading(T("Installing update..."))
 
-    --local target_unzip_dir = DataStorage:getDataDir()
-    local target_unzip_dir = 'plugins/'
-    local unzip_command = string.format("unzip -o '%s' -d '%s'", zip_filepath, target_unzip_dir)
-    logger.info("Annas:Ota.installUpdate - Executing: " .. unzip_command)
-
-    local ok, err_code, err_msg_os = os.execute(unzip_command)
-
-    if not ok then
-        local error_detail = "Unknown error"
-        if type(err_code) == "number" then
-            error_detail = "Exit code: " .. err_code
-        elseif type(err_msg_os) == "string" then
-            error_detail = err_msg_os
-        end
-        logger.err("Annas:Ota.installUpdate - Failed to extract ZIP: " .. error_detail .. " Command: " .. unzip_command)
+    if not ensure_directory(ota_cache_dir) then
+        local err_msg = "Could not create OTA cache directory: " .. ota_cache_dir
+        logger.err("Annas:Ota.installUpdate - " .. err_msg)
         _show_ota_final_message(T("Update installation failed."), true)
-        return { error = "Failed to extract update package: " .. error_detail }
+        return { error = err_msg }
     end
 
-    logger.info("Annas:Ota.installUpdate - ZIP extracted successfully.")
+    local prep_ok, prep_err = prepare_clean_directory(extract_dir)
+    if not prep_ok then
+        local err_msg = "Could not prepare extraction directory: " .. tostring(prep_err)
+        logger.err("Annas:Ota.installUpdate - " .. err_msg)
+        _show_ota_final_message(T("Update installation failed."), true)
+        return { error = err_msg }
+    end
 
-    local unpacked_dir = nil
-    for entry in lfs.dir("plugins") do
-        if entry:match("^fischer") then
-            unpacked_dir = "plugins/" .. entry
-            break
+    local extract_ok, extract_err = extract_zip_with_shell(zip_filepath, extract_dir)
+    if not extract_ok then
+        logger.err("Annas:Ota.installUpdate - Failed to extract ZIP: " .. tostring(extract_err))
+        _show_ota_final_message(T("Update installation failed."), true)
+        return { error = "Failed to extract update package: " .. tostring(extract_err) }
+    end
+
+    local unpacked_dir = find_extracted_plugin_root(extract_dir, plugin_name)
+    if not unpacked_dir then
+        logger.err("Annas:Ota.installUpdate - Could not locate extracted plugin files in " .. extract_dir)
+        _show_ota_final_message(T("Update installation failed."), true)
+        return { error = "Could not locate extracted plugin files." }
+    end
+
+    if util.directoryExists(backup_dir) then
+        local cleanup_backup_ok, cleanup_backup_err = remove_tree(backup_dir)
+        if not cleanup_backup_ok then
+            logger.err("Annas:Ota.installUpdate - Could not clean previous OTA backup: " .. tostring(cleanup_backup_err))
+            _show_ota_final_message(T("Update installation failed."), true)
+            return { error = "Could not clean previous OTA backup." }
         end
     end
 
-    os.execute("rm -rf plugins/annas.koplugin")
-    logger.info("Annas:Ota.installUpdate - Trying to clean up old plugin files: 'plugins/annas.koplugin'")
-    
-    if unpacked_dir then
+    local moved_to_backup, move_backup_err = os.rename(target_plugin_path, backup_dir)
+    if not moved_to_backup then
+        logger.err("Annas:Ota.installUpdate - Could not stage existing plugin for rollback: " .. tostring(move_backup_err))
+        _show_ota_final_message(T("Update installation failed."), true)
+        return { error = "Could not stage existing plugin for rollback." }
+    end
 
-        local mv_ok, mv_err = os.rename(unpacked_dir, 'plugins/annas.koplugin')
-        if not mv_ok then
-            print("Failed to move:", mv_err)
-        else
-            print("Moved successfully!")
+    if not ensure_directory(target_plugin_path) then
+        os.rename(backup_dir, target_plugin_path)
+        logger.err("Annas:Ota.installUpdate - Could not create target plugin directory: " .. target_plugin_path)
+        _show_ota_final_message(T("Update installation failed."), true)
+        return { error = "Could not create target plugin directory." }
+    end
+
+    local copy_ok, copy_err = copy_tree(unpacked_dir, target_plugin_path)
+    if not copy_ok then
+        logger.err("Annas:Ota.installUpdate - Failed to copy extracted plugin files: " .. tostring(copy_err))
+        remove_tree(target_plugin_path)
+        local rollback_ok, rollback_err = os.rename(backup_dir, target_plugin_path)
+        if not rollback_ok then
+            logger.err("Annas:Ota.installUpdate - Rollback failed: " .. tostring(rollback_err))
         end
-    else
-        print('Could not find extracted update files.')
+        _show_ota_final_message(T("Update installation failed."), true)
+        return { error = "Failed to copy extracted plugin files: " .. tostring(copy_err) }
+    end
+
+    local cleanup_backup_ok, cleanup_backup_err = remove_tree(backup_dir)
+    if not cleanup_backup_ok then
+        logger.warn("Annas:Ota.installUpdate - Could not remove OTA backup directory: " .. tostring(cleanup_backup_err))
     end
 
     local rm_ok, rm_err = os.remove(zip_filepath)
@@ -236,6 +552,11 @@ function Ota.installUpdate(zip_filepath, plugin_base_path)
         logger.warn("Annas:Ota.installUpdate - Could not remove downloaded ZIP file: " .. zip_filepath .. " Error: " .. tostring(rm_err))
     else
         logger.info("Annas:Ota.installUpdate - Cleaned up ZIP file: " .. zip_filepath)
+    end
+
+    local cleanup_extract_ok, cleanup_extract_err = remove_tree(extract_dir)
+    if not cleanup_extract_ok then
+        logger.warn("Annas:Ota.installUpdate - Could not remove extraction directory: " .. tostring(cleanup_extract_err))
     end
 
     _show_ota_final_message(T([[Update installed successfully. Please restart KOReader for changes to take effect.]]), false)
@@ -257,8 +578,9 @@ function Ota.startUpdateProcess(plugin_path_from_main)
         return
     end
 
-    if not string.match(plugin_path_from_main, "plugins/annas.koplugin/?$") then
-        local err_msg = string.format(T("Unsupported plugin path for OTA update: %s. Only 'plugins/annas.koplugin' is supported."), plugin_path_from_main)
+    local normalized_plugin_path = normalize_path(plugin_path_from_main)
+    if basename(normalized_plugin_path) ~= "annas.koplugin" or not util.fileExists(join_path(normalized_plugin_path, "_meta.lua")) then
+        local err_msg = string.format(T("Unsupported plugin path for OTA update: %s."), plugin_path_from_main)
         logger.err("Annas:Ota.startUpdateProcess - " .. err_msg)
         _show_ota_final_message(err_msg, true)
         return
@@ -282,7 +604,6 @@ function Ota.startUpdateProcess(plugin_path_from_main)
     end
 
     local latest_version_tag = release_info.tag_name
-    local assets = release_info.assets
 
     if not latest_version_tag or type(latest_version_tag) ~= "string" or #latest_version_tag == 0 then
         logger.warn("Annas:Ota.startUpdateProcess - Invalid or missing latest_version_tag in release information.")
@@ -298,27 +619,16 @@ function Ota.startUpdateProcess(plugin_path_from_main)
     end
     logger.info("Annas:Ota.startUpdateProcess - GitHub tag: " .. latest_version_tag .. ", Normalized latest version: " .. normalized_latest_version)
 
-    --[[if not assets or type(assets) ~= "table" or #assets == 0 then
-        for k,v in pairs(release_info) do
-            print(tostring(k).." = "..tostring(v))
-        end
-        print(release_info)
-        print(release_info[1])
-        logger.warn("Annas:Ota.startUpdateProcess - Invalid or missing assets in release information.")
-        _show_ota_final_message(T("Could not find update files."), true)
-        return
-    end]]--
-
-    if not release_info.zipball_url then
-        logger.warn("Annas:Ota.startUpdateProcess - No download URL found in the first release asset.")
+    local package_info = choose_release_package(release_info)
+    if not package_info or not package_info.url then
+        logger.warn("Annas:Ota.startUpdateProcess - No download URL found in release information.")
         _show_ota_final_message(T("Could not find a download link for the update."), true)
         return
     end
 
-    --local download_url = assets[1].browser_download_url
-    local download_url = release_info.zipball_url
-    local release_msg = release_info.body:match("([^%.]*)")
-    local asset_name = "annas_plugin_update.zip"
+    local download_url = package_info.url
+    local release_msg = type(release_info.body) == "string" and release_info.body:match("([^%.]*)") or ""
+    local asset_name = package_info.name or "annas_plugin_update.zip"
 
     local current_version = Ota.getCurrentPluginVersion(plugin_path_from_main)
     if not current_version then
@@ -327,7 +637,7 @@ function Ota.startUpdateProcess(plugin_path_from_main)
 
     logger.info(string.format("Annas:Ota.startUpdateProcess - Latest version from GitHub (normalized): %s, Current installed version: %s", normalized_latest_version, current_version or "Unknown"))
 
-    if not isVersionOlder(current_version, normalized_latest_version) then
+    if current_version and not isVersionOlder(current_version, normalized_latest_version) then
         local message
         if current_version then
             message = string.format(T("You are already on the latest version (%s) or newer."), current_version)
@@ -354,6 +664,8 @@ function Ota.startUpdateProcess(plugin_path_from_main)
             _show_ota_status_loading(T("Downloading update..."))
             local temp_path_base = DataStorage:getDataDir() .. "/cache"
             local temp_zip_path = temp_path_base .. "/" .. asset_name
+
+            ensure_directory(temp_path_base)
 
             logger.info("Annas:Ota.startUpdateProcess - Temporary download path: " .. temp_zip_path)
 

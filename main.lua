@@ -179,10 +179,13 @@ function Annas:downloadBook(book)
     end
 
     if lfs.attributes(target_dir, "mode") ~= "directory" then
-        local ok, err_mkdir = lfs.mkdir(target_dir)
-        if not ok then
-            Ui.showErrorMessage(string.format(T("Cannot create downloads directory: %s"), err_mkdir or "Unknown error"))
-            return
+        util.makePath(target_dir)
+        if lfs.attributes(target_dir, "mode") ~= "directory" then
+            local ok, err_mkdir = lfs.mkdir(target_dir)
+            if not ok then
+                Ui.showErrorMessage(string.format(T("Cannot create downloads directory: %s"), err_mkdir or "Unknown error"))
+                return
+            end
         end
         logger.info(string.format("Annas:downloadBook - Created downloads directory: %s", target_dir))
     end
