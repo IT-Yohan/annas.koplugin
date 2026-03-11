@@ -48,6 +48,71 @@ function Ui.colonConcat(a, b)
     return _colon_concat(a, b)
 end
 
+local function _findOptionName(options, value, fallback)
+    for _, option in ipairs(options) do
+        if option.value == value then
+            return option.name
+        end
+    end
+
+    return fallback
+end
+
+local function _summarizeLanguageSelection()
+    local selected_languages = Config.getSearchLanguages()
+    if #selected_languages == 0 then
+        return T("Any")
+    end
+
+    if #selected_languages == 1 then
+        return _findOptionName(Config.SUPPORTED_LANGUAGES, selected_languages[1], selected_languages[1])
+    end
+
+    return string.format(T("%d selected"), #selected_languages)
+end
+
+local function _summarizeFormatSelection()
+    local selected_extensions = Config.getSearchExtensions()
+    if #selected_extensions == 0 then
+        return T("Any")
+    end
+
+    if #selected_extensions == 1 then
+        return _findOptionName(Config.SUPPORTED_EXTENSIONS, selected_extensions[1], selected_extensions[1])
+    end
+
+    return string.format(T("%d selected"), #selected_extensions)
+end
+
+local function _showSingleChoiceDialog(parent_ui, title, options_list, selected_value, on_select)
+    local choice_menu
+    local menu_items = {}
+
+    for i, option_info in ipairs(options_list) do
+        menu_items[i] = {
+            text = option_info.name,
+            mandatory_func = function()
+                return selected_value == option_info.value and "[X]" or "[ ]"
+            end,
+            callback = function()
+                _closeAndUntrackDialog(choice_menu)
+                if on_select then
+                    on_select(option_info.value)
+                end
+            end,
+            keep_menu_open = true,
+        }
+    end
+
+    choice_menu = Menu:new{
+        title = title,
+        item_table = menu_items,
+        parent = parent_ui,
+        show_captions = true,
+    }
+    _showAndTrackDialog(choice_menu)
+end
+
 function Ui.showInfoMessage(text)
     if _plugin_instance and _plugin_instance.dialog_manager then
         _plugin_instance.dialog_manager:showInfoMessage(text)
@@ -122,14 +187,17 @@ function Ui.showSimpleMessageDialog(title, text)
     end
 end
 
-function Ui.showDownloadDirectoryDialog()
-    local current_dir = Config.getSetting(Config.SETTINGS_DOWNLOAD_DIR_KEY)
+function Ui.showDownloadDirectoryDialog(on_saved_callback)
+    local current_dir = Config.getDownloadDir()
     DownloadMgr:new{
         title = T("Select Download Directory"),
         onConfirm = function(path)
             if path then
                 Config.saveSetting(Config.SETTINGS_DOWNLOAD_DIR_KEY, path)
                 Ui.showInfoMessage(string.format(T("Download directory set to: %s"), path))
+                if on_saved_callback then
+                    on_saved_callback(path)
+                end
             else
                 Ui.showErrorMessage(T("No directory selected."))
             end
@@ -137,9 +205,7 @@ function Ui.showDownloadDirectoryDialog()
     }:chooseDir(current_dir)
 end
 
-function Ui.showSettingsDialog()
-    local dialog
-
+function Ui.showSettingsDialog(parent_ui)
     local full_source_path = debug.getinfo(1, "S").source
     if full_source_path:sub(1,1) == "@" then
         full_source_path = full_source_path:sub(2)
@@ -147,38 +213,160 @@ function Ui.showSettingsDialog()
     local foo, _ = util.splitFilePathName(full_source_path):gsub("/+", "/")
     local plugin_path, _ = foo:gsub("[\\/]annas[\\/]", "")
 
-    dialog = ButtonDialog:new{
-        title = T("Settings"),
-        buttons = {
-            {{
-            text = T("Set download directory"),
-            callback = function()
-                _closeAndUntrackDialog(dialog)
-                Ui.showDownloadDirectoryDialog()
-            end,
-            }},{{
-            text = T("Timeout settings"),
-            callback = function()
-                _closeAndUntrackDialog(dialog)
-                Ui.showAllTimeoutConfigDialog(_plugin_instance and _plugin_instance.ui)
-            end,
-            }},{{
-            text = T("Check for updates"),
-            keep_menu_open = false,
-            separator = true,
-            callback = function()
-                _closeAndUntrackDialog(dialog)
-                if plugin_path then
-                    Ota.startUpdateProcess(plugin_path)
-                else
-                    logger.err("Annas: Plugin path not available for OTA update.")
-                    Ui.showErrorMessage(T("Error: Plugin path not found. Cannot check for updates."))
-                end
-            end,
-            }}
-        }
+    local settings_parent = parent_ui and parent_ui.ui or (_plugin_instance and _plugin_instance.ui)
+    local settings_menu
+
+    local function refreshSettingsMenu()
+        if settings_menu then
+            settings_menu:updateItems(nil, true)
+        end
+    end
+
+    settings_menu = Menu:new{
+        title = T("Anna Settings"),
+        subtitle = T("Persistent options used for search and download"),
+        item_table = {
+            {
+                text = T("Search order"),
+                mandatory_func = function()
+                    return Config.getSearchOrderName()
+                end,
+                callback = function()
+                    Ui.showOrdersSelectionDialog(settings_parent, refreshSettingsMenu)
+                end,
+            },
+            {
+                text = T("Search languages"),
+                mandatory_func = _summarizeLanguageSelection,
+                callback = function()
+                    Ui.showSettingsDialog(parent_zlibrary)
+                end,
+            },
+            {
+                text = T("Search formats"),
+                mandatory_func = _summarizeFormatSelection,
+                callback = function()
+                    Ui.showExtensionSelectionDialog(settings_parent, refreshSettingsMenu)
+                end,
+            },
+            {
+                text = T("Download directory"),
+                mandatory_func = function()
+                    return Config.getDownloadDir()
+                end,
+                callback = function()
+                    Ui.showDownloadDirectoryDialog(refreshSettingsMenu)
+                end,
+            },
+            {
+                text = T("Turn off Wi-Fi after download"),
+                mandatory_func = function()
+                    return Config.getTurnOffWifiAfterDownload() and T("On") or T("Off")
+                end,
+                callback = function()
+                    Config.setTurnOffWifiAfterDownload(not Config.getTurnOffWifiAfterDownload())
+                    refreshSettingsMenu()
+                end,
+            },
+            {
+                text = T("Mirror strategy"),
+                mandatory_func = function()
+                    return Config.getMirrorStrategyName()
+                end,
+                callback = function()
+                    _showSingleChoiceDialog(settings_parent, T("Mirror strategy"), Config.SUPPORTED_MIRROR_STRATEGIES, Config.getMirrorStrategy(), function(value)
+                        Config.setMirrorStrategy(value)
+                        refreshSettingsMenu()
+                    end)
+                end,
+            },
+            {
+                text = T("Automatic retries"),
+                mandatory_func = function()
+                    return Config.getRetryCountName()
+                end,
+                callback = function()
+                    _showSingleChoiceDialog(settings_parent, T("Automatic retries"), Config.SUPPORTED_RETRY_COUNTS, Config.getRetryCount(), function(value)
+                        Config.setRetryCount(value)
+                        refreshSettingsMenu()
+                    end)
+                end,
+            },
+            {
+                text = T("Preferred download source"),
+                mandatory_func = function()
+                    return Config.getPreferredSourceName()
+                end,
+                callback = function()
+                    _showSingleChoiceDialog(settings_parent, T("Preferred download source"), Config.SUPPORTED_PREFERRED_SOURCES, Config.getPreferredSource(), function(value)
+                        Config.setPreferredSource(value)
+                        refreshSettingsMenu()
+                    end)
+                end,
+            },
+            {
+                text = T("Timeout policy"),
+                mandatory_func = function()
+                    return Config.getTimeoutPolicyName()
+                end,
+                callback = function()
+                    local timeout_policy_options = {
+                        Config.SUPPORTED_TIMEOUT_POLICIES[1],
+                        Config.SUPPORTED_TIMEOUT_POLICIES[2],
+                        Config.SUPPORTED_TIMEOUT_POLICIES[3],
+                    }
+                    _showSingleChoiceDialog(settings_parent, T("Timeout policy"), timeout_policy_options, Config.getTimeoutPolicy(), function(value)
+                        local apply_policy = function()
+                            Config.applyTimeoutPolicy(value)
+                            Ui.showInfoMessage(T("Timeout policy updated."))
+                            refreshSettingsMenu()
+                        end
+
+                        if Config.getTimeoutPolicy() == Config.TIMEOUT_POLICY_CUSTOM then
+                            if _plugin_instance and _plugin_instance.dialog_manager then
+                                _plugin_instance.dialog_manager:showConfirmDialog({
+                                    text = T("Applying a timeout policy will replace the current custom timeout values. Continue?"),
+                                    ok_text = T("Apply"),
+                                    cancel_text = T("Cancel"),
+                                    ok_callback = apply_policy,
+                                })
+                            else
+                                apply_policy()
+                            end
+                        else
+                            apply_policy()
+                        end
+                    end)
+                end,
+            },
+            {
+                text = T("Advanced timeout settings"),
+                mandatory_func = function()
+                    return Config.getTimeoutPolicyName()
+                end,
+                callback = function()
+                    Ui.showAllTimeoutConfigDialog(settings_parent, refreshSettingsMenu)
+                end,
+            },
+            {
+                text = "---",
+            },
+            {
+                text = T("Check for updates"),
+                callback = function()
+                    if plugin_path then
+                        Ota.startUpdateProcess(plugin_path)
+                    else
+                        logger.err("Annas: Plugin path not available for OTA update.")
+                        Ui.showErrorMessage(T("Error: Plugin path not found. Cannot check for updates."))
+                    end
+                end,
+            },
+        },
+        parent = settings_parent,
+        show_captions = true,
     }
-    _showAndTrackDialog(dialog)
+    _showAndTrackDialog(settings_menu)
 end
 
 local function _showMultiSelectionDialog(parent_ui, title, setting_key, options_list, ok_callback, is_single)
@@ -204,9 +392,15 @@ local function _showMultiSelectionDialog(parent_ui, title, setting_key, options_
                 return current_selection_state[option_value] and "[X]" or "[ ]"
             end,
             callback = function()
-                current_selection_state[option_value] = not current_selection_state[option_value]
+                if is_single then
+                    for value in pairs(current_selection_state) do
+                        current_selection_state[value] = false
+                    end
+                    current_selection_state[option_value] = true
+                else
+                    current_selection_state[option_value] = not current_selection_state[option_value]
+                end
                 selection_menu:updateItems(nil, true)
-                -- single select
                 if is_single then
                     selection_menu:onClose()
                 end
@@ -225,14 +419,6 @@ local function _showMultiSelectionDialog(parent_ui, title, setting_key, options_
                 local new_selected_values = {}
                 for value, is_selected in pairs(current_selection_state) do
                     if is_selected then table.insert(new_selected_values, value) end
-                end
-                if is_single and #new_selected_values > 1 then
-                    local original_option = selected_values_table[1]
-                    for i = #new_selected_values, 1, -1 do
-                        if new_selected_values[i] == original_option then
-                            table.remove(new_selected_values, i)
-                        end
-                    end
                 end
 
                 table.sort(new_selected_values, function(a, b)
@@ -272,12 +458,12 @@ local function  _showRadioSelectionDialog(parent_ui, title, setting_key, options
     _showMultiSelectionDialog(parent_ui, title, setting_key, options_list, ok_callback, true)
 end
 
-function Ui.showLanguageSelectionDialog(parent_ui)
-    _showMultiSelectionDialog(parent_ui, T("Select search languages"), Config.SETTINGS_SEARCH_LANGUAGES_KEY, Config.SUPPORTED_LANGUAGES)
+function Ui.showLanguageSelectionDialog(parent_ui, ok_callback)
+    _showMultiSelectionDialog(parent_ui, T("Select search languages"), Config.SETTINGS_SEARCH_LANGUAGES_KEY, Config.SUPPORTED_LANGUAGES, ok_callback)
 end
 
-function Ui.showExtensionSelectionDialog(parent_ui)
-    _showMultiSelectionDialog(parent_ui, T("Select search formats"), Config.SETTINGS_SEARCH_EXTENSIONS_KEY, Config.SUPPORTED_EXTENSIONS)
+function Ui.showExtensionSelectionDialog(parent_ui, ok_callback)
+    _showMultiSelectionDialog(parent_ui, T("Select search formats"), Config.SETTINGS_SEARCH_EXTENSIONS_KEY, Config.SUPPORTED_EXTENSIONS, ok_callback)
 end
 
 function Ui.showOrdersSelectionDialog(parent_ui, ok_callback)
@@ -301,7 +487,7 @@ function Ui.showGenericInputDialog(title, setting_key, current_value_or_default,
                 text = T("Set"),
                 callback = function()
                     local raw_input = dialog:getInputText() or ""
-                    local close_dialog_after_action = false
+                    Ui.showSettingsDialog(parent_zlibrary)
 
                     if validate_and_save_callback then
                         if validate_and_save_callback(raw_input, setting_key) then
@@ -855,7 +1041,7 @@ function Ui.showTimeoutConfigDialog(parent_ui, timeout_name, timeout_key, getter
     _showAndTrackDialog(dialog_menu)
 end
 
-function Ui.showAllTimeoutConfigDialog(parent_ui)
+function Ui.showAllTimeoutConfigDialog(parent_ui, on_close_callback)
     local timeout_items = {}
     local main_menu
     
@@ -926,6 +1112,17 @@ function Ui.showAllTimeoutConfigDialog(parent_ui)
         parent = parent_ui,
         show_captions = true,
     }
+
+    local original_onClose = main_menu.onClose
+    main_menu.onClose = function(self)
+        if original_onClose then
+            original_onClose(self)
+        end
+        if on_close_callback then
+            on_close_callback()
+        end
+    end
+
     _showAndTrackDialog(main_menu)
 end
 

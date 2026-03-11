@@ -32,6 +32,8 @@ local ANTI_BOT_MARKERS = {
 local IS_WINDOWS = package.config:sub(1, 1) == "\\"
 local COMMAND_EXISTS_CACHE = {}
 
+math.randomseed(os.time())
+
 local function ensure_cache_dir()
     if util.directoryExists(CACHE_DIR) then
         return true
@@ -197,16 +199,66 @@ local function fetch_domains_from_wikipedia()
 end
 
 local function get_annas_archive_domains()
+    local strategy = Config.getMirrorStrategy()
     local cached_domains, cache_time = read_cache()
-    if cached_domains then
-        local age_hours = math.floor((os.time() - cache_time) / 3600)
-        logger.dbg(string.format("Annas:scraper - Using cached mirrors (age: %d hours)", age_hours))
-        return cached_domains
+    local discovered_domains = cached_domains
+
+    if not discovered_domains then
+        discovered_domains = fetch_domains_from_wikipedia()
     end
 
-    local domains = fetch_domains_from_wikipedia()
-    if domains and #domains > 0 then
-        return domains
+    local function merge_unique(primary, secondary)
+        local merged = {}
+        local seen = {}
+
+        for _, domain in ipairs(primary or {}) do
+            if domain and not seen[domain] then
+                seen[domain] = true
+                table.insert(merged, domain)
+            end
+        end
+
+        for _, domain in ipairs(secondary or {}) do
+            if domain and not seen[domain] then
+                seen[domain] = true
+                table.insert(merged, domain)
+            end
+        end
+
+        return merged
+    end
+
+    local function shuffle_copy(values)
+        local shuffled = {}
+        for i, value in ipairs(values) do
+            shuffled[i] = value
+        end
+
+        for i = #shuffled, 2, -1 do
+            local j = math.random(i)
+            shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
+        end
+
+        return shuffled
+    end
+
+    if discovered_domains and cache_time then
+        local age_hours = math.floor((os.time() - cache_time) / 3600)
+        logger.dbg(string.format("Annas:scraper - Using cached mirrors (age: %d hours)", age_hours))
+    end
+
+    if strategy == "builtin_first" then
+        local domains = merge_unique(FALLBACK_DOMAINS, discovered_domains)
+        if #domains > 0 then
+            return domains
+        end
+    elseif strategy == "rotate" then
+        local domains = merge_unique(discovered_domains, FALLBACK_DOMAINS)
+        if #domains > 0 then
+            return shuffle_copy(domains)
+        end
+    elseif discovered_domains and #discovered_domains > 0 then
+        return discovered_domains
     end
 
     logger.warn("Annas:scraper - Falling back to built-in mirror list")
@@ -670,38 +722,60 @@ end
 function check_url(url, timeout)
     logger.dbg("Annas:scraper - check_url(" .. url .. ")")
 
-    local failures = {}
     local methods = {
         fetch_with_api,
         fetch_with_lua_socket,
         fetch_with_external_command,
     }
+    local max_attempts = Config.getRetryCount() + 1
 
-    for _, fetcher in ipairs(methods) do
-        local status, data, detail = fetcher(url, timeout)
-        if status == "success" then
-            return status, data
+    local function resolve_failures(failures)
+        for _, failure in ipairs(failures) do
+            if failure.status == "dns_error" then
+                return "dns_error", nil, failure.detail
+            end
         end
 
-        if status ~= "no_external_command" and status ~= "no_socket" then
-            table.insert(failures, { status = status, detail = detail })
+        for _, failure in ipairs(failures) do
+            if failure.status == "anti_bot" then
+                return "anti_bot", nil, failure.detail
+            end
         end
+
+        for _, failure in ipairs(failures) do
+            if failure.status == "request_failed" then
+                return "request_failed", nil, failure.detail
+            end
+        end
+
+        local last_failure = failures[#failures]
+        return "network_error", nil, last_failure and last_failure.detail or "All HTTP methods failed"
     end
 
-    for _, failure in ipairs(failures) do
-        if failure.status == "dns_error" then
-            return "dns_error", nil, failure.detail
+    for attempt = 1, max_attempts do
+        local failures = {}
+
+        for _, fetcher in ipairs(methods) do
+            local status, data, detail = fetcher(url, timeout)
+            if status == "success" then
+                return status, data
+            end
+
+            if status ~= "no_external_command" and status ~= "no_socket" then
+                table.insert(failures, { status = status, detail = detail })
+            end
         end
+
+        local status, _, detail = resolve_failures(failures)
+        local should_retry = attempt < max_attempts and (status == "network_error" or status == "request_failed")
+        if not should_retry then
+            return status, nil, detail
+        end
+
+        logger.info(string.format("Annas:scraper - Retrying %s (%d/%d)", url, attempt + 1, max_attempts))
     end
 
-    for _, failure in ipairs(failures) do
-        if failure.status == "anti_bot" then
-            return "anti_bot", nil, failure.detail
-        end
-    end
-
-    local last_failure = failures[#failures]
-    return "network_error", nil, last_failure and last_failure.detail or "All HTTP methods failed"
+    return "network_error", nil, "All HTTP methods failed"
 end
 
 function scraper(query, page_number)
@@ -773,8 +847,20 @@ function download_book(book, path)
         ".st/",
         ".bz/",
     }
+    local preferred_source = Config.getPreferredSource()
     local timeout = Config.getDownloadTimeout()
     local failures = new_failure_stats()
+
+    if preferred_source ~= "auto" then
+        local preferred_ext = "." .. preferred_source .. "/"
+        local reordered_exts = { preferred_ext }
+        for _, ext in ipairs(lgli_exts) do
+            if ext ~= preferred_ext then
+                table.insert(reordered_exts, ext)
+            end
+        end
+        lgli_exts = reordered_exts
+    end
 
     if not book.download then
         logger.warn("Annas:scraper - No download source available for book")

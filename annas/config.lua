@@ -12,6 +12,10 @@ Config.SETTINGS_TURN_OFF_WIFI_AFTER_DOWNLOAD_KEY = "annas_turn_off_wifi_after_do
 Config.SETTINGS_TIMEOUT_SEARCH_KEY = "annas_timeout_search"
 Config.SETTINGS_TIMEOUT_DOWNLOAD_KEY = "annas_timeout_download"
 Config.SETTINGS_TIMEOUT_COVER_KEY = "annas_timeout_cover"
+Config.SETTINGS_MIRROR_STRATEGY_KEY = "annas_mirror_strategy"
+Config.SETTINGS_RETRY_COUNT_KEY = "annas_retry_count"
+Config.SETTINGS_TIMEOUT_POLICY_KEY = "annas_timeout_policy"
+Config.SETTINGS_PREFERRED_SOURCE_KEY = "annas_preferred_source"
 Config.SETTINGS_TEST_MODE_KEY = "annas_test_mode"
 
 Config.LEGACY_SETTINGS = {
@@ -54,9 +58,32 @@ end
 Config.DEFAULT_DOWNLOAD_DIR_FALLBACK = G_reader_settings:readSetting("home_dir")
              or require("apps/filemanager/filemanagerutil").getDefaultDir()
 
-Config.TIMEOUT_SEARCH = { 15, 15 }
-Config.TIMEOUT_DOWNLOAD = { 15, -1 }
-Config.TIMEOUT_COVER = { 5, 15 }
+Config.TIMEOUT_POLICY_STANDARD = "standard"
+Config.TIMEOUT_POLICY_RELAXED = "relaxed"
+Config.TIMEOUT_POLICY_AGGRESSIVE = "aggressive"
+Config.TIMEOUT_POLICY_CUSTOM = "custom"
+
+Config.TIMEOUT_PROFILES = {
+    [Config.TIMEOUT_POLICY_STANDARD] = {
+        search = { 15, 15 },
+        download = { 15, -1 },
+        cover = { 5, 15 },
+    },
+    [Config.TIMEOUT_POLICY_RELAXED] = {
+        search = { 25, 45 },
+        download = { 25, -1 },
+        cover = { 10, 20 },
+    },
+    [Config.TIMEOUT_POLICY_AGGRESSIVE] = {
+        search = { 8, 12 },
+        download = { 10, 60 },
+        cover = { 4, 8 },
+    },
+}
+
+Config.TIMEOUT_SEARCH = Config.TIMEOUT_PROFILES[Config.TIMEOUT_POLICY_STANDARD].search
+Config.TIMEOUT_DOWNLOAD = Config.TIMEOUT_PROFILES[Config.TIMEOUT_POLICY_STANDARD].download
+Config.TIMEOUT_COVER = Config.TIMEOUT_PROFILES[Config.TIMEOUT_POLICY_STANDARD].cover
 
 Config.SUPPORTED_LANGUAGES = {
     { name = "العربية", value = "arabic" },
@@ -116,6 +143,51 @@ Config.SUPPORTED_ORDERS = {
     { name = T("Oldest Added"), value = "oldest_added"},
     { name = T("Random"), value = "random"}
 }
+
+Config.SUPPORTED_MIRROR_STRATEGIES = {
+    { name = T("Automatic"), value = "auto" },
+    { name = T("Rotate mirrors"), value = "rotate" },
+    { name = T("Built-in mirrors first"), value = "builtin_first" },
+}
+
+Config.SUPPORTED_RETRY_COUNTS = {
+    { name = T("Off"), value = 0 },
+    { name = T("1 retry"), value = 1 },
+    { name = T("2 retries"), value = 2 },
+    { name = T("3 retries"), value = 3 },
+}
+
+Config.SUPPORTED_TIMEOUT_POLICIES = {
+    { name = T("Standard"), value = Config.TIMEOUT_POLICY_STANDARD },
+    { name = T("Relaxed"), value = Config.TIMEOUT_POLICY_RELAXED },
+    { name = T("Aggressive"), value = Config.TIMEOUT_POLICY_AGGRESSIVE },
+    { name = T("Custom"), value = Config.TIMEOUT_POLICY_CUSTOM },
+}
+
+Config.SUPPORTED_PREFERRED_SOURCES = {
+    { name = T("Automatic"), value = "auto" },
+    { name = "libgen.la", value = "la" },
+    { name = "libgen.gl", value = "gl" },
+    { name = "libgen.li", value = "li" },
+    { name = "libgen.is", value = "is" },
+    { name = "libgen.rs", value = "rs" },
+    { name = "libgen.st", value = "st" },
+    { name = "libgen.bz", value = "bz" },
+}
+
+local function copyTimeoutPair(timeout_pair)
+    return { timeout_pair[1], timeout_pair[2] }
+end
+
+local function findOptionName(options, value, fallback)
+    for _, option in ipairs(options) do
+        if option.value == value then
+            return option.name
+        end
+    end
+
+    return fallback
+end
 
 function Config.getSetting(key, default)
     local value = readRawSetting(key)
@@ -211,29 +283,133 @@ function Config.setTestMode(enabled)
     Config.saveSetting(Config.SETTINGS_TEST_MODE_KEY, enabled)
 end
 
+function Config.getMirrorStrategy()
+    local value = Config.getSetting(Config.SETTINGS_MIRROR_STRATEGY_KEY, "auto")
+    for _, option in ipairs(Config.SUPPORTED_MIRROR_STRATEGIES) do
+        if option.value == value then
+            return value
+        end
+    end
+
+    return "auto"
+end
+
+function Config.getMirrorStrategyName()
+    return findOptionName(Config.SUPPORTED_MIRROR_STRATEGIES, Config.getMirrorStrategy(), T("Automatic"))
+end
+
+function Config.setMirrorStrategy(value)
+    Config.saveSetting(Config.SETTINGS_MIRROR_STRATEGY_KEY, value)
+end
+
+function Config.getRetryCount()
+    local saved = tonumber(Config.getSetting(Config.SETTINGS_RETRY_COUNT_KEY, 1))
+    if saved and saved >= 0 and saved <= 3 then
+        return math.floor(saved)
+    end
+
+    return 1
+end
+
+function Config.getRetryCountName()
+    return findOptionName(Config.SUPPORTED_RETRY_COUNTS, Config.getRetryCount(), T("1 retry"))
+end
+
+function Config.setRetryCount(value)
+    Config.saveSetting(Config.SETTINGS_RETRY_COUNT_KEY, tonumber(value) or 1)
+end
+
+function Config.hasCustomTimeoutOverrides()
+    return readRawSetting(Config.SETTINGS_TIMEOUT_SEARCH_KEY) ~= nil
+        or readRawSetting(Config.SETTINGS_TIMEOUT_DOWNLOAD_KEY) ~= nil
+        or readRawSetting(Config.SETTINGS_TIMEOUT_COVER_KEY) ~= nil
+end
+
+function Config.getTimeoutPolicy()
+    local value = Config.getSetting(Config.SETTINGS_TIMEOUT_POLICY_KEY, Config.TIMEOUT_POLICY_STANDARD)
+    if value == Config.TIMEOUT_POLICY_CUSTOM and not Config.hasCustomTimeoutOverrides() then
+        return Config.TIMEOUT_POLICY_STANDARD
+    end
+
+    for _, option in ipairs(Config.SUPPORTED_TIMEOUT_POLICIES) do
+        if option.value == value then
+            return value
+        end
+    end
+
+    return Config.TIMEOUT_POLICY_STANDARD
+end
+
+function Config.getTimeoutPolicyName()
+    return findOptionName(Config.SUPPORTED_TIMEOUT_POLICIES, Config.getTimeoutPolicy(), T("Standard"))
+end
+
+function Config.setTimeoutPolicy(value)
+    Config.saveSetting(Config.SETTINGS_TIMEOUT_POLICY_KEY, value)
+end
+
+function Config.applyTimeoutPolicy(value)
+    Config.setTimeoutPolicy(value)
+    Config.deleteSetting(Config.SETTINGS_TIMEOUT_SEARCH_KEY)
+    Config.deleteSetting(Config.SETTINGS_TIMEOUT_DOWNLOAD_KEY)
+    Config.deleteSetting(Config.SETTINGS_TIMEOUT_COVER_KEY)
+end
+
+function Config.markTimeoutPolicyCustom()
+    Config.setTimeoutPolicy(Config.TIMEOUT_POLICY_CUSTOM)
+end
+
+function Config.getPreferredSource()
+    local value = Config.getSetting(Config.SETTINGS_PREFERRED_SOURCE_KEY, "auto")
+    for _, option in ipairs(Config.SUPPORTED_PREFERRED_SOURCES) do
+        if option.value == value then
+            return value
+        end
+    end
+
+    return "auto"
+end
+
+function Config.getPreferredSourceName()
+    return findOptionName(Config.SUPPORTED_PREFERRED_SOURCES, Config.getPreferredSource(), T("Automatic"))
+end
+
+function Config.setPreferredSource(value)
+    Config.saveSetting(Config.SETTINGS_PREFERRED_SOURCE_KEY, value)
+end
+
+function Config.getTimeoutDefaults(kind)
+    local policy = Config.getTimeoutPolicy()
+    local profile = Config.TIMEOUT_PROFILES[policy] or Config.TIMEOUT_PROFILES[Config.TIMEOUT_POLICY_STANDARD]
+    local timeout_pair = profile[kind] or Config.TIMEOUT_PROFILES[Config.TIMEOUT_POLICY_STANDARD][kind]
+    return copyTimeoutPair(timeout_pair)
+end
+
 -- Timeout configuration functions
 function Config.getTimeoutConfig(timeout_key, default_timeout)
     local saved_timeout = Config.getSetting(timeout_key)
     if saved_timeout and type(saved_timeout) == "table" and #saved_timeout == 2 then
         return saved_timeout
     end
-    return default_timeout
+
+    return copyTimeoutPair(default_timeout)
 end
 
 function Config.setTimeoutConfig(timeout_key, block_timeout, total_timeout)
     Config.saveSetting(timeout_key, {block_timeout, total_timeout})
+    Config.markTimeoutPolicyCustom()
 end
 
 function Config.getSearchTimeout()
-    return Config.getTimeoutConfig(Config.SETTINGS_TIMEOUT_SEARCH_KEY, Config.TIMEOUT_SEARCH)
+    return Config.getTimeoutConfig(Config.SETTINGS_TIMEOUT_SEARCH_KEY, Config.getTimeoutDefaults("search"))
 end
 
 function Config.getDownloadTimeout()
-    return Config.getTimeoutConfig(Config.SETTINGS_TIMEOUT_DOWNLOAD_KEY, Config.TIMEOUT_DOWNLOAD)
+    return Config.getTimeoutConfig(Config.SETTINGS_TIMEOUT_DOWNLOAD_KEY, Config.getTimeoutDefaults("download"))
 end
 
 function Config.getCoverTimeout()
-    return Config.getTimeoutConfig(Config.SETTINGS_TIMEOUT_COVER_KEY, Config.TIMEOUT_COVER)
+    return Config.getTimeoutConfig(Config.SETTINGS_TIMEOUT_COVER_KEY, Config.getTimeoutDefaults("cover"))
 end
 
 function Config.formatTimeoutForDisplay(timeout_pair)

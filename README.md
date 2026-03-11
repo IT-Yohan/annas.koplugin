@@ -51,25 +51,50 @@ Notes:
 1. Ensure you are in the KOReader file browser.
 2. Open the `Search` menu.
 3. Select `Anna's Archive`.
-4. Enter a query, then optionally adjust sort order, languages, formats, download directory, or timeout settings.
+4. Enter a query, then optionally adjust sort order, languages, and formats directly in the search dialog.
 5. Open a search result.
 6. Tap the format line to download the file.
+
+To configure persistent Anna-specific options in one place:
+
+1. Open `Search`.
+2. Select `Anna's Archive`.
+3. Tap `Settings`.
+
+The settings screen now includes:
+
+- Search order, languages, and formats
+- Download directory
+- Wi-Fi auto-off after download
+- Mirror strategy for Anna mirror probing
+- Automatic retry count for transient network failures
+- Preferred download source for LibGen-backed downloads
+- Timeout policy presets, plus advanced per-operation timeout editing
+- Update check
 
 Notes:
 
 - There is no account setup step.
 - There is no `annas_credentials.lua` override file anymore.
 - Recommended and most-popular Z-library-era browsing paths were removed because Anna's Archive does not use that API flow in this plugin.
+- The current download flow still depends on supported LibGen mirrors exposed through Anna's Archive result pages.
 
 ## DNS Settings
 
-**On some devices, you may need to change your DNS provider to 1.1.1.1 (Cloudflare).**
+**Only change DNS if Anna's Archive repeatedly fails on your network.**
 
 You only need to do this if Anna’s Archive repeatedly does not work, for example:
 
 * Downloads not working
 * No results found (even when searching for something general)
 * “All protocols failed” errors
+
+### Recommended order
+
+1. Try a router-level DNS change first.
+2. Only use device-level edits if you cannot change the router and you understand the risks.
+
+Router-level DNS changes are safer on Kindle and Kobo because they avoid editing system files on the reader.
 
 ### Router-first fix
 
@@ -79,7 +104,13 @@ If you control your router, prefer changing DNS there instead of modifying files
 
 and follow the instructions for your hardware.
 
-### Device-level fix (Kobo & Kindle)
+### Device-level fix (Kobo & Kindle, only if needed)
+
+Warning:
+
+- Device-level DNS edits can be overwritten by updates or networking scripts.
+- Some Kindle setups require remounting the root filesystem writable.
+- If router DNS is available, use that instead.
 
 Follow these steps:
 
@@ -175,9 +206,9 @@ vi /usr/share/udhcpc/default.script
 
 #### Finishing up
 
-To make these changes 'permanent' you can set the files you touched to be immutable, even to `root`, 
-which should prevent future updates from overwriting your changes. Simply run `chattr +` to the files
-you modified. To undo these changes later simply run `chattr -i` against the same files. 
+To make these changes more persistent, you can set the files you touched to be immutable, even to `root`,
+which should help prevent future updates from overwriting your changes. Simply run `chattr +i` on the files
+you modified. To undo these changes later, run `chattr -i` against the same files.
 
 **For udhcpc**:
  
@@ -189,8 +220,6 @@ and
 `chattr +i /etc/dhcpcd.conf`
 
 - Reboot your device and try again.
-
-  Done!
 
 ## Keywords
 
