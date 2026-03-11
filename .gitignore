@@ -1,4 +1,10 @@
 .idea
 scripts/
+!scripts/
+scripts/*
+!scripts/verify-env.ps1
 .DS_Store
 .vscode/
+!.vscode/
+.vscode/*
+!.vscode/extensions.json

@@ -16,6 +16,36 @@ The plugin was tested on KOReader installed on a Kindle Paperwhite 11th generati
 3.  Copy the `annas.koplugin` directory to the `koreader/plugins` folder on your device.
 4.  Restart KOReader.
 
+## Windows Development Setup
+
+Phase 0 uses the smallest Windows toolchain that is useful for local work on this repository:
+
+- `git`, `curl`, and `tar`
+- `luajit` for a runtime that is close to KOReader's LuaJIT-based environment
+- `lua` and `luarocks` for generic Lua tooling
+- `lua-language-server` for editor diagnostics and navigation
+
+The current repo setup was verified with `winget`:
+
+```powershell
+winget install --id DEVCOM.LuaJIT --accept-source-agreements --accept-package-agreements --silent
+winget install --id DEVCOM.Lua --accept-source-agreements --accept-package-agreements --silent
+winget install --id LuaLS.lua-language-server --accept-source-agreements --accept-package-agreements --silent
+```
+
+After installation, open a new shell so the updated `PATH` is visible, then run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\verify-env.ps1
+```
+
+Notes:
+
+- `luajit` is the best local match for KOReader plugin work.
+- `lua` and `luarocks` are included to make future tooling installs possible.
+- Native LuaRocks packages that compile C extensions may still require a separate MinGW or MSVC build toolchain on Windows.
+- Recommended VS Code extensions for this repo live in `.vscode/extensions.json`.
+
 
 ## Usage
 
