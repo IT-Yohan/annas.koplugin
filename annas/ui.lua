@@ -211,6 +211,14 @@ function Ui.updateLoadingMessage(message_widget, text)
         return Ui.showLoadingMessage(text)
     end
 
+    if message_widget.is_closed or message_widget.is_destroyed then
+        return Ui.showLoadingMessage(text)
+    end
+
+    if message_widget._annas_last_text == text then
+        return message_widget
+    end
+
     local updated = false
 
     if type(message_widget.setText) == "function" then
@@ -227,7 +235,7 @@ function Ui.updateLoadingMessage(message_widget, text)
     end
 
     if updated then
-        UIManager:setDirty("all", "full")
+        message_widget._annas_last_text = text
         return message_widget
     end
 
