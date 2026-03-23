@@ -194,13 +194,44 @@ function Annas:downloadBook(book)
     --logger.info(string.format("Annas:downloadBook - Target filepath: %s", target_filepath))
 
     local function attemptDownload()
-        local loading_msg = Ui.showLoadingMessage(T("Downloading, please wait …"))
+        local loading_title = T("Downloading, please wait …")
+        local loading_msg = Ui.showLoadingMessage(loading_title)
+        local progress_lines = {}
 
-        local function task_download()
-            local downloaded_file, err = download_book(book, target_dir)
+        local function update_progress_popup(progress_text)
+            if type(progress_text) ~= "string" then
+                return
+            end
+
+            local trimmed = util.trim(progress_text)
+            if trimmed == "" then
+                return
+            end
+
+            if #progress_lines == 0 or progress_lines[#progress_lines] ~= trimmed then
+                table.insert(progress_lines, trimmed)
+                if #progress_lines > 7 then
+                    table.remove(progress_lines, 1)
+                end
+            end
+
+            local body = table.concat(progress_lines, "\n")
+            loading_msg = Ui.updateLoadingMessage(loading_msg, loading_title .. "\n\n" .. body)
+        end
+
+        local function task_download(report_progress)
+            local function emit_progress(message)
+                if report_progress then
+                    report_progress(message)
+                end
+            end
+
+            emit_progress(T("Preparing download..."))
+            local downloaded_file, err = download_book(book, target_dir, emit_progress)
             if not downloaded_file then
                 error(err or T("Download failed. Please try again later."))
             end
+            emit_progress(T("Download completed."))
             return downloaded_file
         end
 
@@ -248,13 +279,15 @@ function Annas:downloadBook(book)
                 -- Retry callback
                 local new_loading_msg = Ui.showLoadingMessage(T("Retrying download..."))
                 loading_msg = new_loading_msg
-                AsyncHelper.run(task_download, on_success_download, on_error_download, loading_msg)
+                loading_title = T("Retrying download...")
+                progress_lines = {}
+                AsyncHelper.run(task_download, on_success_download, on_error_download, loading_msg, update_progress_popup)
             end, function(final_err_msg)
                 -- Cancel callback - user already knows about the error
             end, loading_msg)
         end
 
-        AsyncHelper.run(task_download, on_success_download, on_error_download, loading_msg)
+        AsyncHelper.run(task_download, on_success_download, on_error_download, loading_msg, update_progress_popup)
     end
 
     Ui.confirmDownload(book.title, function()

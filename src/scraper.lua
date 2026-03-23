@@ -618,6 +618,12 @@ local function build_debug_suffix(stats)
     return "\n\nDebug: " .. table.concat(stats.debug_trace, " | ")
 end
 
+local function notify_progress(progress_cb, message)
+    if type(progress_cb) == "function" and type(message) == "string" and message ~= "" then
+        progress_cb(message)
+    end
+end
+
 local function record_failure(stats, kind, detail, mirror)
     local key = kind
     if key ~= "dns_error" and key ~= "anti_bot" and key ~= "mirror_error" and key ~= "network_error" then
@@ -1393,10 +1399,12 @@ local function extract_copy_download_url(html)
     return nil
 end
 
-local function attempt_file_download(download_url, filename, timeout, failures, cookie_jar)
+local function attempt_file_download(download_url, filename, timeout, failures, cookie_jar, progress_cb)
     local file_status
     local file_data
     local file_detail
+
+    notify_progress(progress_cb, T("Downloading file from mirror..."))
 
     if type(cookie_jar) == "table" then
         file_status, file_data, file_detail = check_url_with_cookie_session(download_url, timeout, cookie_jar)
@@ -1414,38 +1422,45 @@ local function attempt_file_download(download_url, filename, timeout, failures, 
     if file_status ~= "success" then
         record_failure(failures, file_status, file_detail, download_url)
         logger.warn(string.format("Annas:scraper - File request failed on %s (%s)", download_url, tostring(file_status)))
+        notify_progress(progress_cb, T("Mirror request failed."))
         return nil
     end
 
     if not file_data or file_data == "" then
         record_failure(failures, "mirror_error", "Empty downloaded file", download_url)
         logger.warn("Annas:scraper - Empty file response from " .. download_url)
+        notify_progress(progress_cb, T("Mirror returned an empty file."))
         return nil
     end
 
     if detect_anti_bot_response(file_data) then
         record_failure(failures, "anti_bot", "Anti-bot response instead of file", download_url)
         logger.warn("Annas:scraper - Anti-bot response instead of file from " .. download_url)
+        notify_progress(progress_cb, T("Mirror returned an anti-bot page."))
         return nil
     end
 
     if looks_like_html(file_data) then
         record_failure(failures, "mirror_error", "Mirror returned HTML instead of a file", download_url)
         logger.warn("Annas:scraper - Mirror returned HTML instead of a file: " .. download_url)
+        notify_progress(progress_cb, T("Mirror returned HTML instead of the book file."))
         return nil
     end
 
+    notify_progress(progress_cb, T("Saving downloaded file..."))
     local ok, save_err = save_file_bytes(filename, file_data)
     if not ok then
         logger.err("Annas:scraper - Failed to save downloaded file: " .. tostring(save_err))
+        notify_progress(progress_cb, T("Failed to save the downloaded file."))
         return nil, T("Failed to save downloaded file.")
     end
 
     logger.info("Annas:scraper - Download finished: " .. filename)
+    notify_progress(progress_cb, T("File saved successfully."))
     return filename
 end
 
-local function try_lgli_download(book, filename, timeout, failures)
+local function try_lgli_download(book, filename, timeout, failures, progress_cb)
     local lgli_exts = {
         ".la/",
         ".gl/",
@@ -1472,24 +1487,29 @@ local function try_lgli_download(book, filename, timeout, failures)
     for _, lgli_ext in ipairs(lgli_exts) do
         repeat
             local lgli_url = "https://libgen" .. lgli_ext
+            notify_progress(progress_cb, string.format(T("Trying LibGen mirror: %s"), lgli_url))
             local download_page = lgli_url .. "ads.php?md5=" .. tostring(book.md5 or "")
+            notify_progress(progress_cb, T("Fetching LibGen download page..."))
             local status, data, detail = check_url(download_page, timeout)
 
             if status ~= "success" then
                 record_failure(failures, status, detail, lgli_url)
                 logger.warn(string.format("Annas:scraper - Download page request failed on %s (%s)", lgli_url, tostring(status)))
+                notify_progress(progress_cb, T("LibGen mirror request failed."))
                 break
             end
 
             if not data or data == "" then
                 record_failure(failures, "mirror_error", "Empty download page", lgli_url)
                 logger.warn("Annas:scraper - Empty download page from " .. lgli_url)
+                notify_progress(progress_cb, T("LibGen mirror returned an empty page."))
                 break
             end
 
             if detect_anti_bot_response(data) then
                 record_failure(failures, "anti_bot", "Anti-bot response on download page", lgli_url)
                 logger.warn("Annas:scraper - Anti-bot response on download page from " .. lgli_url)
+                notify_progress(progress_cb, T("LibGen mirror returned an anti-bot page."))
                 break
             end
 
@@ -1497,11 +1517,12 @@ local function try_lgli_download(book, filename, timeout, failures)
             if not download_link then
                 record_failure(failures, "mirror_error", "No file link on download page", lgli_url)
                 logger.warn("Annas:scraper - No final download link found on " .. lgli_url)
+                notify_progress(progress_cb, T("No LibGen download link found on this mirror."))
                 break
             end
 
             local download_url = lgli_url .. download_link
-            local downloaded_file, save_err = attempt_file_download(download_url, filename, timeout, failures)
+            local downloaded_file, save_err = attempt_file_download(download_url, filename, timeout, failures, nil, progress_cb)
             if downloaded_file then
                 return downloaded_file
             end
@@ -1515,10 +1536,11 @@ local function try_lgli_download(book, filename, timeout, failures)
     return nil
 end
 
-local function try_anna_slow_download(book, filename, timeout, failures)
+local function try_anna_slow_download(book, filename, timeout, failures, progress_cb)
     local detail_url = tostring(book.link or "")
     if detail_url == "" then
         record_failure(failures, "mirror_error", "Missing Anna detail page URL", "annas")
+        notify_progress(progress_cb, T("Missing Anna detail page URL."))
         return nil
     end
 
@@ -1538,8 +1560,10 @@ local function try_anna_slow_download(book, filename, timeout, failures)
     end
 
     trace("detail=" .. short_url(detail_url))
+    notify_progress(progress_cb, T("Opening Anna detail page..."))
 
     local function fetch_html_page(page_url, page_label)
+        notify_progress(progress_cb, page_label .. "...")
         local status, data, detail = check_url_with_cookie_session(page_url, timeout, cookie_jar)
         if status ~= "success" then
             local fallback_status, fallback_data, fallback_detail = check_url(page_url, timeout)
@@ -1552,6 +1576,7 @@ local function try_anna_slow_download(book, filename, timeout, failures)
             record_failure(failures, status, detail, page_url)
             logger.warn(string.format("Annas:scraper - %s request failed on %s (%s)", page_label, page_url, tostring(status)))
             trace(string.format("%s fail:%s", page_label, tostring(status)))
+            notify_progress(progress_cb, page_label .. ": " .. T("failed"))
             return nil
         end
 
@@ -1559,6 +1584,7 @@ local function try_anna_slow_download(book, filename, timeout, failures)
             record_failure(failures, "mirror_error", "Empty page response", page_url)
             logger.warn("Annas:scraper - Empty page response from " .. page_url)
             trace(page_label .. " empty")
+            notify_progress(progress_cb, page_label .. ": " .. T("empty response"))
             return nil
         end
 
@@ -1566,10 +1592,12 @@ local function try_anna_slow_download(book, filename, timeout, failures)
             record_failure(failures, "anti_bot", "Anti-bot response on page", page_url)
             logger.warn("Annas:scraper - Anti-bot response on page: " .. page_url)
             trace(page_label .. " anti-bot")
+            notify_progress(progress_cb, page_label .. ": " .. T("anti-bot page"))
             return nil
         end
 
         trace(page_label .. " ok")
+        notify_progress(progress_cb, page_label .. ": " .. T("ok"))
 
         return data
     end
@@ -1581,7 +1609,8 @@ local function try_anna_slow_download(book, filename, timeout, failures)
         end
 
         trace("direct=" .. short_url(direct_url))
-        local downloaded_file, save_err = attempt_file_download(direct_url, filename, timeout, failures, cookie_jar)
+        notify_progress(progress_cb, T("Found direct mirror URL. Attempting file download..."))
+        local downloaded_file, save_err = attempt_file_download(direct_url, filename, timeout, failures, cookie_jar, progress_cb)
         if downloaded_file then
             return downloaded_file
         end
@@ -1599,6 +1628,7 @@ local function try_anna_slow_download(book, filename, timeout, failures)
         end
         seen_pages[slow_link] = true
         trace("slow=" .. short_url(slow_link))
+        notify_progress(progress_cb, T("Opening slow partner page..."))
 
         local page_data = fetch_html_page(slow_link, "Slow partner page")
         if not page_data then
@@ -1616,6 +1646,7 @@ local function try_anna_slow_download(book, filename, timeout, failures)
             trace("wait=" .. tostring(wait_seconds))
             local bounded_wait = math.min(wait_seconds + 1, 45)
             logger.info(string.format("Annas:scraper - Waiting %ds for Anna slow partner link", bounded_wait))
+            notify_progress(progress_cb, string.format(T("Waiting %d seconds for slow mirror..."), bounded_wait))
             sleep_seconds(bounded_wait)
 
             local waited_data = fetch_html_page(slow_link, "Slow partner page refresh")
@@ -1628,11 +1659,13 @@ local function try_anna_slow_download(book, filename, timeout, failures)
             end
         else
             trace("wait=none")
+            notify_progress(progress_cb, T("No wait timer found; trying timed refreshes..."))
 
             -- Some mirrors omit visible countdown text; try timed refresh retries anyway.
             local fallback_waits = { 8, 12 }
             for _, fallback_wait in ipairs(fallback_waits) do
                 trace("retry_wait=" .. tostring(fallback_wait))
+                notify_progress(progress_cb, string.format(T("Retrying slow mirror after %d seconds..."), fallback_wait))
                 sleep_seconds(fallback_wait)
 
                 local retried_data = fetch_html_page(slow_link, "Slow partner fallback refresh")
@@ -1648,6 +1681,7 @@ local function try_anna_slow_download(book, filename, timeout, failures)
 
         record_failure(failures, "mirror_error", "No final direct link found on Anna slow page", slow_link)
         logger.warn("Annas:scraper - No final direct URL found on Anna slow page: " .. slow_link)
+        notify_progress(progress_cb, T("Slow partner page did not expose a final download link."))
         return nil
     end
 
@@ -1671,6 +1705,7 @@ local function try_anna_slow_download(book, filename, timeout, failures)
         local slow_links = extract_slow_partner_links(page_data, page_url)
         logger.info(string.format("Annas:scraper - Found %d slow-link candidates on %s", #slow_links, page_url))
         trace("slow_candidates=" .. tostring(#slow_links))
+        notify_progress(progress_cb, string.format(T("Found %d slow-server candidates."), #slow_links))
         for _, slow_link in ipairs(slow_links) do
             downloaded_file, save_err = try_slow_link_page(slow_link)
             if downloaded_file or save_err then
@@ -1682,6 +1717,7 @@ local function try_anna_slow_download(book, filename, timeout, failures)
             local partner_links = extract_partner_download_links(page_data, page_url)
             logger.info(string.format("Annas:scraper - Found %d partner-page candidates on %s", #partner_links, page_url))
             trace("partner_candidates=" .. tostring(#partner_links))
+            notify_progress(progress_cb, string.format(T("Found %d partner pages to try."), #partner_links))
             for _, partner_link in ipairs(partner_links) do
                 trace("partner=" .. short_url(partner_link))
                 downloaded_file, save_err = try_page(partner_link, false)
@@ -1697,13 +1733,15 @@ local function try_anna_slow_download(book, filename, timeout, failures)
     return try_page(detail_url, true)
 end
 
-function download_book(book, path)
+function download_book(book, path, progress_cb)
     local timeout = Config.getDownloadTimeout()
     local failures = new_failure_stats()
     local providers = get_book_providers(book)
+    notify_progress(progress_cb, T("Checking available download providers..."))
 
     if #providers == 0 then
         logger.warn("Annas:scraper - No supported provider key found for book")
+        notify_progress(progress_cb, T("No supported provider route found."))
         return nil, T("No supported download mirror is available for this book.")
     end
 
@@ -1719,9 +1757,11 @@ function download_book(book, path)
 
     local filename = path .. "/" .. sanitize_name(book.title) .. "_" .. sanitize_name(book.author) .. "." .. tostring(book.format or "bin")
     logger.info(string.format("Annas:scraper - Starting download for %s (providers: %s)", tostring(book.title), table.concat(providers, ", ")))
+    notify_progress(progress_cb, T("Starting mirror resolution..."))
 
     if has_lgli then
-        local downloaded_file, save_err = try_lgli_download(book, filename, timeout, failures)
+        notify_progress(progress_cb, T("Trying LibGen route..."))
+        local downloaded_file, save_err = try_lgli_download(book, filename, timeout, failures, progress_cb)
         if downloaded_file then
             return downloaded_file
         end
@@ -1732,7 +1772,8 @@ function download_book(book, path)
     end
 
     if has_zlib then
-        local downloaded_file, save_err = try_anna_slow_download(book, filename, timeout, failures)
+        notify_progress(progress_cb, T("Trying Anna slow-download route..."))
+        local downloaded_file, save_err = try_anna_slow_download(book, filename, timeout, failures, progress_cb)
         if downloaded_file then
             return downloaded_file
         end
@@ -1749,6 +1790,7 @@ function download_book(book, path)
         and failures.network_error == 0
         and failures.request_failed == 0
         and failures.anti_bot == 0 then
+        notify_progress(progress_cb, T("Failed to resolve a usable Anna slow-download link."))
         return nil, T("Could not resolve a usable Anna slow-download link for this Z-Library item. Try opening the Anna page in a browser first, then retry.") .. debug_suffix
     end
 
@@ -1757,6 +1799,7 @@ function download_book(book, path)
         error_message = error_message .. debug_suffix
     end
     logger.err("Annas:scraper - Download failed: " .. error_message)
+    notify_progress(progress_cb, T("Download failed."))
     return nil, error_message
 end
 

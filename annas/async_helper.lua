@@ -4,12 +4,16 @@ local logger = require("logger")
 
 local AsyncHelper = {}
 
-function AsyncHelper.run(task_func, on_success, on_error, loading_msg_widget_to_close)
+function AsyncHelper.run(task_func, on_success, on_error, loading_msg_widget_to_close, on_progress)
     logger.dbg("AsyncHelper.run - START")
 
     local co = coroutine.create(function()
+        local function report_progress(progress_text)
+            coroutine.yield({ progress = tostring(progress_text or "") })
+        end
+
         logger.dbg("AsyncHelper.run - Coroutine START")
-        local success, result = pcall(task_func)
+        local success, result = pcall(task_func, report_progress)
         logger.dbg("AsyncHelper.run - Coroutine task_func finished. OK: %s", tostring(success))
 
         if success then
@@ -34,6 +38,18 @@ function AsyncHelper.run(task_func, on_success, on_error, loading_msg_widget_to_
             logger.err("AsyncHelper.run - Coroutine resumption failed: %s", tostring(returned_value))
             close_loading_message()
             if on_error then on_error("AsyncHelper: Coroutine resumption failed: " .. tostring(returned_value)) end
+            return
+        end
+
+        if coroutine.status(co) ~= "dead" and type(returned_value) == "table" and returned_value.progress ~= nil then
+            logger.dbg("AsyncHelper.run - Progress event received.")
+            if on_progress then
+                local progress_ok, progress_err = pcall(on_progress, tostring(returned_value.progress))
+                if not progress_ok then
+                    logger.err("AsyncHelper.run - Progress callback failed: %s", tostring(progress_err))
+                end
+            end
+            UIManager:nextTick(resume_handler)
             return
         end
 

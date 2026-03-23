@@ -202,6 +202,38 @@ function Ui.showLoadingMessage(text)
     return message
 end
 
+function Ui.updateLoadingMessage(message_widget, text)
+    if type(text) ~= "string" or text == "" then
+        return message_widget
+    end
+
+    if not message_widget then
+        return Ui.showLoadingMessage(text)
+    end
+
+    local updated = false
+
+    if type(message_widget.setText) == "function" then
+        message_widget:setText(text)
+        updated = true
+    else
+        local success = pcall(function()
+            message_widget.text = text
+            if type(message_widget.update) == "function" then
+                message_widget:update()
+            end
+        end)
+        updated = success
+    end
+
+    if updated then
+        UIManager:setDirty("all", "full")
+        return message_widget
+    end
+
+    return message_widget
+end
+
 function Ui.closeMessage(message_widget)
     if message_widget then
         if type(message_widget.close) == "function" then
