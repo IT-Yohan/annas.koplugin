@@ -1223,6 +1223,8 @@ local function parse_wait_seconds(html)
     end
 
     local js_wait_seconds = html:match("waitSeconds%s*=%s*(%d+)")
+        or html:match("wait_seconds%s*=%s*(%d+)")
+        or html:match("[Ww]ait%s*[Ss]econds%s*[:=]%s*(%d+)")
     if js_wait_seconds then
         local parsed_js_seconds = tonumber(js_wait_seconds)
         if parsed_js_seconds and parsed_js_seconds > 0 then
@@ -1231,6 +1233,8 @@ local function parse_wait_seconds(html)
     end
 
     local dom_wait_seconds = html:match("js%-partner%-countdown[^>]*>%s*(%d+)%s*<")
+        or html:match("[Pp]lease%s*wait%s*<span[^>]*>%s*(%d+)%s*</span>%s*seconds")
+        or html:match("(%d+)%s*seconds%s*to%s*download")
     if dom_wait_seconds then
         local parsed_dom_seconds = tonumber(dom_wait_seconds)
         if parsed_dom_seconds and parsed_dom_seconds > 0 then
@@ -1270,13 +1274,58 @@ local function extract_copy_download_url(html)
         end
     end
 
+    local function looks_like_download_candidate(url)
+        local lower = tostring(url):lower()
+        local host = lower:match("^https?://([^/%?#]+)") or ""
+        local path = lower:match("^https?://[^/%?#]+([^?#]*)") or ""
+
+        if host == "" then
+            return false
+        end
+
+        if host:find("github.com", 1, true)
+            or host:find("raw.githubusercontent.com", 1, true)
+            or host:find("darkreader.org", 1, true)
+            or host:find("wikipedia.org", 1, true) then
+            return false
+        end
+
+        if path:find("/slow_download/", 1, true)
+            or path:find("/fast_download/", 1, true) then
+            return false
+        end
+
+        local has_known_marker = lower:find("books-files", 1, true)
+            or lower:find("/redirection?", 1, true)
+            or lower:find("annas_archive_data__aacid", 1, true)
+            or lower:find("aacid__", 1, true)
+            or lower:find("annas-arch-", 1, true)
+            or lower:find("zlib3_files", 1, true)
+            or lower:find("filename=", 1, true)
+
+        local has_file_extension = lower:match("%.epub([%?&].*)?$")
+            or lower:match("%.pdf([%?&].*)?$")
+            or lower:match("%.mobi([%?&].*)?$")
+            or lower:match("%.azw3?([%?&].*)?$")
+            or lower:match("%.fb2([%?&].*)?$")
+            or lower:match("%.djvu?([%?&].*)?$")
+            or lower:match("%.cbz([%?&].*)?$")
+            or lower:match("%.cbr([%?&].*)?$")
+            or lower:match("%.txt([%?&].*)?$")
+            or lower:match("%.zip([%?&].*)?$")
+            or lower:match("%.7z([%?&].*)?$")
+            or lower:match("%.rar([%?&].*)?$")
+
+        return has_known_marker or has_file_extension
+    end
+
     local function score_candidate(url)
+        if not looks_like_download_candidate(url) then
+            return -1000
+        end
+
         local lower = tostring(url):lower()
         local score = 0
-
-        if lower:find("/slow_download/", 1, true) or lower:find("/fast_download/", 1, true) then
-            return -100
-        end
 
         if lower:find("books-files", 1, true) then
             score = score + 90
@@ -1309,10 +1358,6 @@ local function extract_copy_download_url(html)
             or lower:match("%.cbz([%?&].*)?$")
             or lower:match("%.txt([%?&].*)?$") then
             score = score + 35
-        end
-
-        if lower:find("/d", 1, true) and lower:find("/g", 1, true) then
-            score = score + 20
         end
 
         return score
@@ -1583,6 +1628,22 @@ local function try_anna_slow_download(book, filename, timeout, failures)
             end
         else
             trace("wait=none")
+
+            -- Some mirrors omit visible countdown text; try timed refresh retries anyway.
+            local fallback_waits = { 8, 12 }
+            for _, fallback_wait in ipairs(fallback_waits) do
+                trace("retry_wait=" .. tostring(fallback_wait))
+                sleep_seconds(fallback_wait)
+
+                local retried_data = fetch_html_page(slow_link, "Slow partner fallback refresh")
+                if retried_data then
+                    local retry_direct_url = extract_copy_download_url(retried_data)
+                    downloaded_file, save_err = try_download_from_direct_link(retry_direct_url)
+                    if downloaded_file or save_err then
+                        return downloaded_file, save_err
+                    end
+                end
+            end
         end
 
         record_failure(failures, "mirror_error", "No final direct link found on Anna slow page", slow_link)
