@@ -40,6 +40,21 @@ local function _closeAndUntrackDialog(dialog)
     end
 end
 
+local function _showTrackedDialogWithRefresh(dialog)
+    local shown = _showAndTrackDialog(dialog)
+    UIManager:setDirty("all", "full")
+    return shown
+end
+
+local function _closeTrackedDialogWithRefresh(dialog)
+    if not dialog then
+        return
+    end
+
+    _closeAndUntrackDialog(dialog)
+    UIManager:setDirty("all", "full")
+end
+
 local function _colon_concat(a, b)
     return a .. ": " .. b
 end
@@ -197,52 +212,55 @@ function Ui.showErrorMessage(text)
 end
 
 function Ui.showLoadingMessage(text)
-    -- Use a long timeout instead of 0 because some runtimes treat 0 as immediate close.
     local message = InfoMessage:new{ text = text, timeout = 3600 }
-    message._annas_last_text = text
-    if _plugin_instance and _plugin_instance.dialog_manager then
-        local shown = _plugin_instance.dialog_manager:showAndTrackDialog(message)
-        UIManager:setDirty("all", "full")
-        return shown
-    end
-
-    UIManager:show(message)
-    UIManager:setDirty("all", "full")
-    return message
-end
-
-function Ui.updateLoadingMessage(message_widget, text)
-    if type(text) ~= "string" or text == "" then
-        return message_widget
-    end
-
-    if message_widget and not message_widget.is_closed and not message_widget.is_destroyed then
-        if message_widget._annas_last_text == text then
-            return message_widget
-        end
-        Ui.closeMessage(message_widget)
-    end
-
-    return Ui.showLoadingMessage(text)
+    return _showTrackedDialogWithRefresh(message)
 end
 
 function Ui.closeMessage(message_widget)
-    if message_widget then
-        if _plugin_instance and _plugin_instance.dialog_manager then
-            _plugin_instance.dialog_manager:closeAndUntrackDialog(message_widget)
-            UIManager:setDirty("all", "full")
-            return
-        end
+    _closeTrackedDialogWithRefresh(message_widget)
+end
 
-        if type(message_widget.close) == "function" then
-            message_widget:close()
-            -- Ensure complete screen refresh after closing the progress dialog
-            -- Use setDirty with "full" to completely redraw the screen area
-            UIManager:setDirty("all", "full")
-        else
-            UIManager:close(message_widget)
-        end
+local function _createProgressDialog(title, text)
+    local dialog = ConfirmBox:new{
+        title = title,
+        text = text,
+        no_ok_button = true,
+        cancel_text = T("Hide"),
+        cancel_callback = function()
+            -- Intentionally no-op: user can hide the dialog while task keeps running.
+        end,
+    }
+    dialog._annas_progress_title = title
+    dialog._annas_last_text = text
+    return dialog
+end
+
+function Ui.showProgressDialog(title, text)
+    local dialog_title = title or T("Download progress")
+    local dialog_text = text or ""
+    local dialog = _createProgressDialog(dialog_title, dialog_text)
+    return _showTrackedDialogWithRefresh(dialog)
+end
+
+function Ui.updateProgressDialog(dialog, text)
+    if type(text) ~= "string" or text == "" then
+        return dialog
     end
+
+    local dialog_title = (dialog and dialog._annas_progress_title) or T("Download progress")
+    if dialog and not dialog.is_closed and not dialog.is_destroyed then
+        if dialog._annas_last_text == text then
+            return dialog
+        end
+        _closeAndUntrackDialog(dialog)
+    end
+
+    local refreshed = _createProgressDialog(dialog_title, text)
+    return _showTrackedDialogWithRefresh(refreshed)
+end
+
+function Ui.closeProgressDialog(dialog)
+    _closeTrackedDialogWithRefresh(dialog)
 end
 
 function Ui.showFullTextDialog(title, full_text)

@@ -161,14 +161,6 @@ function Annas:downloadBook(book)
         return
     end
 
-    --[[     local download_url = Config.getDownloadUrl(book.download)
-    logger.info(string.format("Annas:downloadBook - Download URL: %s", download_url))
-
-    local safe_title = util.trim(book.title or "Unknown Title"):gsub("[/\\?%*:|\"<>%c]", "_")
-    local safe_author = util.trim(book.author or "Unknown Author"):gsub("[/\\?%*:|\"<>%c]", "_")
-    local filename = string.format("%s - %s.%s", safe_title, safe_author, book.format or "unknown")
-    logger.info(string.format("Annas:downloadBook - Proposed filename: %s", filename)) ]]
-
     local target_dir = Config.getDownloadDir()
 
     if not target_dir then
@@ -190,13 +182,15 @@ function Annas:downloadBook(book)
         logger.info(string.format("Annas:downloadBook - Created downloads directory: %s", target_dir))
     end
 
-    --local target_filepath = target_dir .. "/" .. filename
-    --logger.info(string.format("Annas:downloadBook - Target filepath: %s", target_filepath))
-
     local function attemptDownload()
-        local loading_title = T("Downloading, please wait …")
-        local loading_msg = Ui.showLoadingMessage(loading_title)
+        local progress_title = T("Download in progress")
+        local progress_dialog = Ui.showProgressDialog(progress_title, T("Preparing download..."))
         local last_progress_text = ""
+
+        local function close_progress_dialog()
+            Ui.closeProgressDialog(progress_dialog)
+            progress_dialog = nil
+        end
 
         local function update_progress_popup(progress_text)
             if type(progress_text) ~= "string" then
@@ -213,7 +207,7 @@ function Annas:downloadBook(book)
             end
             last_progress_text = trimmed
 
-            loading_msg = Ui.updateLoadingMessage(loading_msg, loading_title .. " " .. trimmed)
+            progress_dialog = Ui.updateProgressDialog(progress_dialog, trimmed)
         end
 
         local function task_download(report_progress)
@@ -233,7 +227,7 @@ function Annas:downloadBook(book)
         end
 
         local function on_success_download(downloaded_file)
-            Ui.closeMessage(loading_msg)
+            close_progress_dialog()
 
             local has_wifi_toggle = Device:hasWifiToggle()
             local default_turn_off_wifi = Config.getTurnOffWifiAfterDownload()
@@ -266,27 +260,24 @@ function Annas:downloadBook(book)
         end
 
         local function on_error_download(err_msg)
+            close_progress_dialog()
+
             local error_string = tostring(err_msg)
             if string.find(error_string, "Download limit reached or file is an HTML page", 1, true) then
-                Ui.closeMessage(loading_msg)
                 Ui.showErrorMessage(T("Download limit reached. Please try again later or check your account."))
                 return
             end
             
             -- Use retry dialog for timeout and network errors
             Ui.showRetryErrorDialog(err_msg, T("Download"), function()
-                -- Retry callback
-                local new_loading_msg = Ui.showLoadingMessage(T("Retrying download..."))
-                loading_msg = new_loading_msg
-                loading_title = T("Retrying download...")
+                progress_dialog = Ui.showProgressDialog(progress_title, T("Retrying download..."))
                 last_progress_text = ""
-                AsyncHelper.run(task_download, on_success_download, on_error_download, loading_msg, update_progress_popup)
-            end, function(final_err_msg)
-                -- Cancel callback - user already knows about the error
-            end, loading_msg)
+                AsyncHelper.run(task_download, on_success_download, on_error_download, nil, update_progress_popup)
+            end, function()
+            end, nil)
         end
 
-        AsyncHelper.run(task_download, on_success_download, on_error_download, loading_msg, update_progress_popup)
+        AsyncHelper.run(task_download, on_success_download, on_error_download, nil, update_progress_popup)
     end
 
     Ui.confirmDownload(book.title, function()
