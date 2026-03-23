@@ -198,6 +198,10 @@ end
 
 function Ui.showLoadingMessage(text)
     local message = InfoMessage:new{ text = text, timeout = 0 }
+    if _plugin_instance and _plugin_instance.dialog_manager then
+        return _plugin_instance.dialog_manager:showAndTrackDialog(message)
+    end
+
     UIManager:show(message)
     return message
 end
@@ -244,6 +248,11 @@ end
 
 function Ui.closeMessage(message_widget)
     if message_widget then
+        if _plugin_instance and _plugin_instance.dialog_manager then
+            _plugin_instance.dialog_manager:closeAndUntrackDialog(message_widget)
+            return
+        end
+
         if type(message_widget.close) == "function" then
             message_widget:close()
             -- Ensure complete screen refresh after closing the progress dialog
