@@ -233,6 +233,8 @@ function Annas:downloadBook(book)
         end
 
         local function on_success_download(downloaded_file)
+            Ui.closeMessage(loading_msg)
+
             local has_wifi_toggle = Device:hasWifiToggle()
             local default_turn_off_wifi = Config.getTurnOffWifiAfterDownload()
 

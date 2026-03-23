@@ -199,6 +199,7 @@ end
 function Ui.showLoadingMessage(text)
     -- Use a long timeout instead of 0 because some runtimes treat 0 as immediate close.
     local message = InfoMessage:new{ text = text, timeout = 3600 }
+    message._annas_last_text = text
     if _plugin_instance and _plugin_instance.dialog_manager then
         local shown = _plugin_instance.dialog_manager:showAndTrackDialog(message)
         UIManager:setDirty("all", "full")
@@ -215,39 +216,14 @@ function Ui.updateLoadingMessage(message_widget, text)
         return message_widget
     end
 
-    if not message_widget then
-        return Ui.showLoadingMessage(text)
+    if message_widget and not message_widget.is_closed and not message_widget.is_destroyed then
+        if message_widget._annas_last_text == text then
+            return message_widget
+        end
+        Ui.closeMessage(message_widget)
     end
 
-    if message_widget.is_closed or message_widget.is_destroyed then
-        return Ui.showLoadingMessage(text)
-    end
-
-    if message_widget._annas_last_text == text then
-        return message_widget
-    end
-
-    local updated = false
-
-    if type(message_widget.setText) == "function" then
-        message_widget:setText(text)
-        updated = true
-    else
-        local success = pcall(function()
-            message_widget.text = text
-            if type(message_widget.update) == "function" then
-                message_widget:update()
-            end
-        end)
-        updated = success
-    end
-
-    if updated then
-        message_widget._annas_last_text = text
-        return message_widget
-    end
-
-    return message_widget
+    return Ui.showLoadingMessage(text)
 end
 
 function Ui.closeMessage(message_widget)
