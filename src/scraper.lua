@@ -31,6 +31,7 @@ local ANTI_BOT_MARKERS = {
 }
 local IS_WINDOWS = package.config:sub(1, 1) == "\\"
 local COMMAND_EXISTS_CACHE = {}
+local SCRAPER_USER_AGENT = "KOReader-Annas-Plugin"
 
 math.randomseed(os.time())
 
@@ -587,7 +588,34 @@ local function new_failure_stats()
         request_failed = 0,
         last_detail = nil,
         last_mirror = nil,
+        debug_trace = {},
     }
+end
+
+local function append_debug_trace(stats, message)
+    if type(stats) ~= "table" or type(message) ~= "string" or message == "" then
+        return
+    end
+
+    stats.debug_trace = stats.debug_trace or {}
+    if #stats.debug_trace >= 12 then
+        return
+    end
+
+    local normalized = message:gsub("[\r\n]+", " "):gsub("%s+", " ")
+    if #normalized > 120 then
+        normalized = normalized:sub(1, 117) .. "..."
+    end
+
+    table.insert(stats.debug_trace, normalized)
+end
+
+local function build_debug_suffix(stats)
+    if type(stats) ~= "table" or type(stats.debug_trace) ~= "table" or #stats.debug_trace == 0 then
+        return ""
+    end
+
+    return "\n\nDebug: " .. table.concat(stats.debug_trace, " | ")
 end
 
 local function record_failure(stats, kind, detail, mirror)
@@ -599,6 +627,22 @@ local function record_failure(stats, kind, detail, mirror)
     stats[key] = (stats[key] or 0) + 1
     stats.last_detail = detail
     stats.last_mirror = mirror
+
+    local mirror_hint = tostring(mirror or "?")
+    if #mirror_hint > 60 then
+        mirror_hint = mirror_hint:sub(1, 57) .. "..."
+    end
+
+    local detail_hint = tostring(detail or "")
+    if detail_hint ~= "" then
+        detail_hint = detail_hint:gsub("[\r\n]+", " "):gsub("%s+", " ")
+        if #detail_hint > 40 then
+            detail_hint = detail_hint:sub(1, 37) .. "..."
+        end
+        append_debug_trace(stats, string.format("%s@%s:%s", key, mirror_hint, detail_hint))
+    else
+        append_debug_trace(stats, string.format("%s@%s", key, mirror_hint))
+    end
 end
 
 local function build_search_error_message(stats)
@@ -805,6 +849,108 @@ function check_url(url, timeout)
     return "network_error", nil, "All HTTP methods failed"
 end
 
+local function update_cookie_jar(cookie_jar, headers)
+    if type(cookie_jar) ~= "table" or type(headers) ~= "table" then
+        return
+    end
+
+    local raw_set_cookie = headers["set-cookie"] or headers["Set-Cookie"]
+    if not raw_set_cookie then
+        return
+    end
+
+    local cookie_lines = {}
+    if type(raw_set_cookie) == "string" then
+        table.insert(cookie_lines, raw_set_cookie)
+    elseif type(raw_set_cookie) == "table" then
+        local has_indexed = false
+        for _, value in ipairs(raw_set_cookie) do
+            has_indexed = true
+            if type(value) == "string" then
+                table.insert(cookie_lines, value)
+            end
+        end
+
+        if not has_indexed then
+            for _, value in pairs(raw_set_cookie) do
+                if type(value) == "string" then
+                    table.insert(cookie_lines, value)
+                end
+            end
+        end
+    end
+
+    for _, cookie_line in ipairs(cookie_lines) do
+        local first_part = tostring(cookie_line):match("^%s*([^;]+)")
+        if first_part then
+            local name, value = first_part:match("^%s*([^=]+)=?(.*)$")
+            if name and name ~= "" then
+                local normalized_name = name:gsub("^%s+", ""):gsub("%s+$", "")
+                local normalized_value = tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                if normalized_value == "" or normalized_value:lower() == "deleted" then
+                    cookie_jar[normalized_name] = nil
+                else
+                    cookie_jar[normalized_name] = normalized_value
+                end
+            end
+        end
+    end
+end
+
+local function build_cookie_header(cookie_jar)
+    if type(cookie_jar) ~= "table" then
+        return nil
+    end
+
+    local pairs_list = {}
+    for cookie_name, cookie_value in pairs(cookie_jar) do
+        if cookie_name and cookie_name ~= "" and cookie_value and cookie_value ~= "" then
+            table.insert(pairs_list, tostring(cookie_name) .. "=" .. tostring(cookie_value))
+        end
+    end
+
+    if #pairs_list == 0 then
+        return nil
+    end
+
+    table.sort(pairs_list)
+    return table.concat(pairs_list, "; ")
+end
+
+local function check_url_with_cookie_session(url, timeout, cookie_jar)
+    local request_headers = {
+        ["User-Agent"] = SCRAPER_USER_AGENT,
+    }
+
+    local cookie_header = build_cookie_header(cookie_jar)
+    if cookie_header then
+        request_headers["Cookie"] = cookie_header
+    end
+
+    local response = Api.makeHttpRequest{
+        url = url,
+        method = "GET",
+        headers = request_headers,
+        timeout = timeout,
+    }
+
+    if type(response) == "table" then
+        update_cookie_jar(cookie_jar, response.headers)
+    end
+
+    if type(response) == "table" and not response.error
+        and (response.status_code == 200 or response.status_code == 206)
+        and response.body and response.body ~= "" then
+        return "success", response.body
+    end
+
+    local detail = type(response) == "table"
+        and tostring(response.error or response.status_code or "request failed")
+        or "request failed"
+
+    return classify_transport_error(detail), nil, detail
+end
+
 function scraper(query, page_number)
     local aa_domains = get_annas_archive_domains()
     local search_page = tostring(tonumber(page_number) or 1)
@@ -904,10 +1050,22 @@ local function sleep_seconds(seconds)
         return
     end
 
+    local shell_wait_ok = false
     if IS_WINDOWS then
-        os.execute(string.format('powershell -Command "Start-Sleep -Seconds %d"', wait_seconds))
+        local execute_result = os.execute(string.format('powershell -Command "Start-Sleep -Seconds %d"', wait_seconds))
+        shell_wait_ok = (execute_result == true or execute_result == 0)
     else
-        os.execute(string.format("sleep %d", wait_seconds))
+        local execute_result = os.execute(string.format("sleep %d", wait_seconds))
+        shell_wait_ok = (execute_result == true or execute_result == 0)
+    end
+
+    if shell_wait_ok then
+        return
+    end
+
+    -- Final fallback for restricted runtimes where os.execute is disabled.
+    local start_time = os.time()
+    while os.difftime(os.time(), start_time) < wait_seconds do
     end
 end
 
@@ -1190,8 +1348,24 @@ local function extract_copy_download_url(html)
     return nil
 end
 
-local function attempt_file_download(download_url, filename, timeout, failures)
-    local file_status, file_data, file_detail = check_url(download_url, timeout)
+local function attempt_file_download(download_url, filename, timeout, failures, cookie_jar)
+    local file_status
+    local file_data
+    local file_detail
+
+    if type(cookie_jar) == "table" then
+        file_status, file_data, file_detail = check_url_with_cookie_session(download_url, timeout, cookie_jar)
+        if file_status ~= "success" then
+            logger.dbg(string.format("Annas:scraper - Session request failed on %s (%s), trying generic methods", download_url, tostring(file_status)))
+            local fallback_status, fallback_data, fallback_detail = check_url(download_url, timeout)
+            if fallback_status == "success" then
+                file_status, file_data, file_detail = fallback_status, fallback_data, fallback_detail
+            end
+        end
+    else
+        file_status, file_data, file_detail = check_url(download_url, timeout)
+    end
+
     if file_status ~= "success" then
         record_failure(failures, file_status, file_detail, download_url)
         logger.warn(string.format("Annas:scraper - File request failed on %s (%s)", download_url, tostring(file_status)))
@@ -1304,36 +1478,65 @@ local function try_anna_slow_download(book, filename, timeout, failures)
     end
 
     local seen_pages = {}
+    local cookie_jar = {}
+
+    local function short_url(url)
+        local value = tostring(url or "?")
+        if #value > 80 then
+            return value:sub(1, 77) .. "..."
+        end
+        return value
+    end
+
+    local function trace(message)
+        append_debug_trace(failures, "anna:" .. tostring(message or ""))
+    end
+
+    trace("detail=" .. short_url(detail_url))
 
     local function fetch_html_page(page_url, page_label)
-        local status, data, detail = check_url(page_url, timeout)
+        local status, data, detail = check_url_with_cookie_session(page_url, timeout, cookie_jar)
+        if status ~= "success" then
+            local fallback_status, fallback_data, fallback_detail = check_url(page_url, timeout)
+            if fallback_status == "success" then
+                status, data, detail = fallback_status, fallback_data, fallback_detail
+            end
+        end
+
         if status ~= "success" then
             record_failure(failures, status, detail, page_url)
             logger.warn(string.format("Annas:scraper - %s request failed on %s (%s)", page_label, page_url, tostring(status)))
+            trace(string.format("%s fail:%s", page_label, tostring(status)))
             return nil
         end
 
         if not data or data == "" then
             record_failure(failures, "mirror_error", "Empty page response", page_url)
             logger.warn("Annas:scraper - Empty page response from " .. page_url)
+            trace(page_label .. " empty")
             return nil
         end
 
         if detect_anti_bot_response(data) then
             record_failure(failures, "anti_bot", "Anti-bot response on page", page_url)
             logger.warn("Annas:scraper - Anti-bot response on page: " .. page_url)
+            trace(page_label .. " anti-bot")
             return nil
         end
+
+        trace(page_label .. " ok")
 
         return data
     end
 
     local function try_download_from_direct_link(direct_url)
         if not direct_url then
+            trace("direct:none")
             return nil
         end
 
-        local downloaded_file, save_err = attempt_file_download(direct_url, filename, timeout, failures)
+        trace("direct=" .. short_url(direct_url))
+        local downloaded_file, save_err = attempt_file_download(direct_url, filename, timeout, failures, cookie_jar)
         if downloaded_file then
             return downloaded_file
         end
@@ -1350,6 +1553,7 @@ local function try_anna_slow_download(book, filename, timeout, failures)
             return nil
         end
         seen_pages[slow_link] = true
+        trace("slow=" .. short_url(slow_link))
 
         local page_data = fetch_html_page(slow_link, "Slow partner page")
         if not page_data then
@@ -1364,6 +1568,7 @@ local function try_anna_slow_download(book, filename, timeout, failures)
 
         local wait_seconds = parse_wait_seconds(page_data)
         if wait_seconds and wait_seconds > 0 then
+            trace("wait=" .. tostring(wait_seconds))
             local bounded_wait = math.min(wait_seconds + 1, 45)
             logger.info(string.format("Annas:scraper - Waiting %ds for Anna slow partner link", bounded_wait))
             sleep_seconds(bounded_wait)
@@ -1376,6 +1581,8 @@ local function try_anna_slow_download(book, filename, timeout, failures)
                     return downloaded_file, save_err
                 end
             end
+        else
+            trace("wait=none")
         end
 
         record_failure(failures, "mirror_error", "No final direct link found on Anna slow page", slow_link)
@@ -1402,6 +1609,7 @@ local function try_anna_slow_download(book, filename, timeout, failures)
 
         local slow_links = extract_slow_partner_links(page_data, page_url)
         logger.info(string.format("Annas:scraper - Found %d slow-link candidates on %s", #slow_links, page_url))
+        trace("slow_candidates=" .. tostring(#slow_links))
         for _, slow_link in ipairs(slow_links) do
             downloaded_file, save_err = try_slow_link_page(slow_link)
             if downloaded_file or save_err then
@@ -1412,7 +1620,9 @@ local function try_anna_slow_download(book, filename, timeout, failures)
         if allow_partner_hop then
             local partner_links = extract_partner_download_links(page_data, page_url)
             logger.info(string.format("Annas:scraper - Found %d partner-page candidates on %s", #partner_links, page_url))
+            trace("partner_candidates=" .. tostring(#partner_links))
             for _, partner_link in ipairs(partner_links) do
+                trace("partner=" .. short_url(partner_link))
                 downloaded_file, save_err = try_page(partner_link, false)
                 if downloaded_file or save_err then
                     return downloaded_file, save_err
@@ -1471,11 +1681,20 @@ function download_book(book, path)
         end
     end
 
-    if has_zlib and not has_lgli and failures.mirror_error > 0 and failures.network_error == 0 then
-        return nil, T("Could not resolve a usable Anna slow-download link for this Z-Library item. Try opening the Anna page in a browser first, then retry.")
+    local debug_suffix = has_zlib and build_debug_suffix(failures) or ""
+
+    if has_zlib and not has_lgli
+        and failures.mirror_error > 0
+        and failures.network_error == 0
+        and failures.request_failed == 0
+        and failures.anti_bot == 0 then
+        return nil, T("Could not resolve a usable Anna slow-download link for this Z-Library item. Try opening the Anna page in a browser first, then retry.") .. debug_suffix
     end
 
     local error_message = build_download_error_message(failures)
+    if debug_suffix ~= "" then
+        error_message = error_message .. debug_suffix
+    end
     logger.err("Annas:scraper - Download failed: " .. error_message)
     return nil, error_message
 end
