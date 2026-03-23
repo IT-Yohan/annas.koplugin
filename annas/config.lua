@@ -7,6 +7,7 @@ local Config = {}
 Config.SETTINGS_SEARCH_LANGUAGES_KEY = "annas_search_languages"
 Config.SETTINGS_SEARCH_EXTENSIONS_KEY = "annas_search_extensions"
 Config.SETTINGS_SEARCH_ORDERS_KEY = "annas_search_order"
+Config.SETTINGS_SEARCH_SOURCE_KEY = "annas_search_source"
 Config.SETTINGS_DOWNLOAD_DIR_KEY = "annas_download_dir"
 Config.SETTINGS_TURN_OFF_WIFI_AFTER_DOWNLOAD_KEY = "annas_turn_off_wifi_after_download"
 Config.SETTINGS_TIMEOUT_SEARCH_KEY = "annas_timeout_search"
@@ -154,6 +155,12 @@ Config.SUPPORTED_ORDERS = {
     { name = T("Random"), value = "random"}
 }
 
+Config.SUPPORTED_SEARCH_SOURCES = {
+    { name = T("All providers"), value = "all" },
+    { name = T("LibGen only"), value = "lgli" },
+    { name = T("Z-Library only"), value = "zlib" },
+}
+
 Config.SUPPORTED_MIRROR_STRATEGIES = {
     { name = T("Automatic"), value = "auto" },
     { name = T("Rotate mirrors"), value = "rotate" },
@@ -280,6 +287,25 @@ function Config.getSearchOrderName()
         end
     end
     return search_order_name
+end
+
+function Config.getSearchSource()
+    local value = Config.getSetting(Config.SETTINGS_SEARCH_SOURCE_KEY, "all")
+    for _, option in ipairs(Config.SUPPORTED_SEARCH_SOURCES) do
+        if option.value == value then
+            return value
+        end
+    end
+
+    return "all"
+end
+
+function Config.getSearchSourceName()
+    return findOptionName(Config.SUPPORTED_SEARCH_SOURCES, Config.getSearchSource(), T("All providers"))
+end
+
+function Config.setSearchSource(value)
+    Config.saveSetting(Config.SETTINGS_SEARCH_SOURCE_KEY, value)
 end
 
 function Config.getTurnOffWifiAfterDownload()

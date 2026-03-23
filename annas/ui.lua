@@ -88,6 +88,69 @@ local function _summarizeOtaToken()
     return Config.hasOtaToken() and T("Configured") or T("Not set")
 end
 
+local function _providerDisplayName(provider_key)
+    if provider_key == "lgli" then
+        return "LibGen"
+    end
+
+    if provider_key == "zlib" then
+        return "Z-Library"
+    end
+
+    return provider_key
+end
+
+local function _extractProvidersFromBook(book_data)
+    local providers = {}
+    local seen = {}
+
+    local function addProvider(provider_key)
+        if provider_key and provider_key ~= "" and not seen[provider_key] then
+            seen[provider_key] = true
+            table.insert(providers, provider_key)
+        end
+    end
+
+    if type(book_data.providers) == "table" then
+        for _, provider_key in ipairs(book_data.providers) do
+            addProvider(provider_key)
+        end
+    end
+
+    local download_text = tostring(book_data.download or "")
+    if download_text:find("lgli", 1, true) then
+        addProvider("lgli")
+    end
+    if download_text:find("zlib", 1, true) then
+        addProvider("zlib")
+    end
+
+    return providers
+end
+
+local function _deriveProviderLabel(book_data)
+    if type(book_data.provider_label) == "string" and book_data.provider_label ~= "" then
+        return book_data.provider_label
+    end
+
+    local providers = _extractProvidersFromBook(book_data)
+    if #providers == 0 then
+        return T("Unavailable")
+    end
+
+    local labels = {}
+    for _, provider_key in ipairs(providers) do
+        table.insert(labels, _providerDisplayName(provider_key))
+    end
+
+    return table.concat(labels, " + ")
+end
+
+local function _hasSupportedProvider(book_data)
+    local providers = _extractProvidersFromBook(book_data)
+    return #providers > 0
+end
+
 local function _showSingleChoiceDialog(parent_ui, title, options_list, selected_value, on_select)
     local choice_menu
     local menu_items = {}
@@ -251,6 +314,18 @@ function Ui.showSettingsDialog(parent_ui)
                 mandatory_func = _summarizeFormatSelection,
                 callback = function()
                     Ui.showExtensionSelectionDialog(settings_parent, refreshSettingsMenu)
+                end,
+            },
+            {
+                text = T("Search source"),
+                mandatory_func = function()
+                    return Config.getSearchSourceName()
+                end,
+                callback = function()
+                    _showSingleChoiceDialog(settings_parent, T("Search source"), Config.SUPPORTED_SEARCH_SOURCES, Config.getSearchSource(), function(value)
+                        Config.setSearchSource(value)
+                        refreshSettingsMenu()
+                    end)
                 end,
             },
             {
@@ -716,6 +791,11 @@ function Ui.createBookMenuItem(book_data, parent_zlibrary_instance)
 
     local additional_info_parts = {}
     local selected_extensions = Config.getSearchExtensions()
+    local provider_label = _deriveProviderLabel(book_data)
+
+    if provider_label and provider_label ~= T("Unavailable") then
+        table.insert(additional_info_parts, _colon_concat(T("Source"), provider_label))
+    end
 
     if book_data.format and book_data.format ~= "N/A" then
         if #selected_extensions ~= 1 then
@@ -812,8 +892,15 @@ function Ui.showBookDetails(parent_zlibrary, book, clear_cache_callback)
     if book.year and book.year ~= "N/A" and tostring(book.year) ~= "0" then table.insert(details_menu_items, { text = _colon_concat(T("Year"), book.year), enabled = false }) end
     if book.lang and book.lang ~= "N/A" then table.insert(details_menu_items, { text = _colon_concat(T("Language"), book.lang), enabled = false }) end
 
+    local provider_label = _deriveProviderLabel(book)
+    if provider_label then
+        table.insert(details_menu_items, { text = _colon_concat(T("Source"), provider_label), enabled = false })
+    end
+
+    local has_supported_provider = _hasSupportedProvider(book)
+
     if book.format and book.format ~= "N/A" then
-        if book.download then
+        if book.download and has_supported_provider then
             table.insert(details_menu_items, {
                 text = string.format(T("Format: %s (tap to download)"), book.format),
                 mandatory = "\u{25B7}",
@@ -822,15 +909,20 @@ function Ui.showBookDetails(parent_zlibrary, book, clear_cache_callback)
                 end,
             })
         else
-            table.insert(details_menu_items, { text = string.format(T("Format: %s (Download source unavailable)"), book.format), enabled = false })
+            table.insert(details_menu_items, { text = string.format(T("Format: %s (No supported provider route)"), book.format), enabled = false })
         end
-    elseif book.download then
+    elseif book.download and has_supported_provider then
         table.insert(details_menu_items, {
             text = T("Download Book (Unknown Format)"),
             mandatory = "\u{25B7}",
             callback = function()
                 parent_zlibrary:downloadBook(book)
             end,
+        })
+    elseif book.download then
+        table.insert(details_menu_items, {
+            text = T("Download unavailable for this provider"),
+            enabled = false,
         })
     end
 

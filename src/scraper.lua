@@ -638,7 +638,7 @@ local function build_search_filters()
     local languages = Config.getSearchLanguages()
     local extensions = Config.getSearchExtensions()
     local order = Config.getSearchOrder()
-    local source = "lgli"
+    local source = Config.getSearchSource()
 
     if languages then
         for _, language in pairs(languages) do
@@ -656,7 +656,9 @@ local function build_search_filters()
         filters = filters .. "&sort=" .. order[1]
     end
 
-    filters = filters .. "&src=" .. source
+    if source ~= "all" then
+        filters = filters .. "&src=" .. source
+    end
     return filters
 end
 
@@ -688,6 +690,34 @@ local function parse_search_results(data, annas_url)
     for _, entry in ipairs(segments) do
         local md5 = extract_md5_and_link(entry)
         if md5 then
+            local providers = {}
+
+            local function add_provider(provider_key)
+                for _, existing in ipairs(providers) do
+                    if existing == provider_key then
+                        return
+                    end
+                end
+                table.insert(providers, provider_key)
+            end
+
+            if string.find(entry, "lgli", 1, true) then
+                add_provider("lgli")
+            end
+            if string.find(entry, "zlib", 1, true) then
+                add_provider("zlib")
+            end
+
+            local provider_labels = {
+                lgli = "LibGen",
+                zlib = "Z-Library",
+            }
+
+            local provider_names = {}
+            for _, provider_key in ipairs(providers) do
+                table.insert(provider_names, provider_labels[provider_key] or provider_key)
+            end
+
             local book = {
                 title = extract_title(entry),
                 author = extract_author(entry),
@@ -695,15 +725,12 @@ local function parse_search_results(data, annas_url)
                 description = extract_description(entry),
                 md5 = md5,
                 link = annas_url .. "md5/" .. md5,
+                providers = providers,
+                provider_label = #provider_names > 0 and table.concat(provider_names, " + ") or nil,
             }
 
-            if string.find(entry, "lgli", 1, true) then
-                book.download = "lgli"
-                if string.find(entry, "zlib", 1, true) then
-                    book.download = book.download .. " | zlib"
-                end
-            elseif string.find(entry, "zlib", 1, true) then
-                book.download = "zlib"
+            if #providers > 0 then
+                book.download = table.concat(providers, " | ")
             end
 
             local number_str = entry:match(" (%d+%.?%d*)MB . ") or entry:match(" (%d+%.?%d*)MB · ")
@@ -837,7 +864,218 @@ function save_file_bytes(path, bytes)
     return true, "saved file to: " .. path
 end
 
-function download_book(book, path)
+local function get_book_providers(book)
+    local providers = {}
+    local seen = {}
+
+    local function add_provider(provider_key)
+        if provider_key and provider_key ~= "" and not seen[provider_key] then
+            seen[provider_key] = true
+            table.insert(providers, provider_key)
+        end
+    end
+
+    if type(book.providers) == "table" then
+        for _, provider_key in ipairs(book.providers) do
+            add_provider(provider_key)
+        end
+    end
+
+    local download_text = tostring(book.download or "")
+    if download_text:find("lgli", 1, true) then
+        add_provider("lgli")
+    end
+    if download_text:find("zlib", 1, true) then
+        add_provider("zlib")
+    end
+
+    return providers
+end
+
+local function sleep_seconds(seconds)
+    local wait_seconds = math.max(0, math.floor(tonumber(seconds) or 0))
+    if wait_seconds <= 0 then
+        return
+    end
+
+    local socket_ok, socket_mod = pcall(require, "socket")
+    if socket_ok and socket_mod and socket_mod.sleep then
+        socket_mod.sleep(wait_seconds)
+        return
+    end
+
+    if IS_WINDOWS then
+        os.execute(string.format('powershell -Command "Start-Sleep -Seconds %d"', wait_seconds))
+    else
+        os.execute(string.format("sleep %d", wait_seconds))
+    end
+end
+
+local function normalize_extracted_url(url)
+    if not url then
+        return nil
+    end
+
+    local normalized = tostring(url)
+    normalized = normalized:gsub("&amp;", "&")
+    normalized = normalized:gsub("^[%s\"']+", "")
+    normalized = normalized:gsub("[%s\"'>)]+$", "")
+    return normalized
+end
+
+local function build_absolute_url(base_url, candidate_url)
+    if not candidate_url or candidate_url == "" then
+        return nil
+    end
+
+    local normalized = normalize_extracted_url(candidate_url)
+    if normalized:match("^https?://") then
+        return normalized
+    end
+
+    local base_origin = tostring(base_url):match("^(https?://[^/]+)")
+    if not base_origin then
+        return normalized
+    end
+
+    if normalized:sub(1, 2) == "//" then
+        local scheme = tostring(base_url):match("^(https?):") or "https"
+        return scheme .. ":" .. normalized
+    end
+
+    if normalized:sub(1, 1) == "/" then
+        return base_origin .. normalized
+    end
+
+    local base_dir = tostring(base_url):match("^(https?://.*/)") or (base_origin .. "/")
+    return base_dir .. normalized
+end
+
+local function extract_slow_partner_links(html, base_url)
+    if type(html) ~= "string" or html == "" then
+        return {}
+    end
+
+    local links = {}
+    local seen = {}
+    local base_host = tostring(base_url):match("^https?://([^/]+)")
+
+    local function add_link(raw_url)
+        local absolute = build_absolute_url(base_url, raw_url)
+        if not absolute then
+            return
+        end
+
+        local host = absolute:match("^https?://([^/]+)")
+        if base_host and host and host ~= base_host then
+            return
+        end
+
+        if not seen[absolute] then
+            seen[absolute] = true
+            table.insert(links, absolute)
+        end
+    end
+
+    for raw_url in html:gmatch('href="([^"]+)"[^>]->%s*[Ss]low%s+[Pp]artner%s+[Ss]erver') do
+        add_link(raw_url)
+    end
+
+    for raw_url in html:gmatch('href="([^"]+)".-[Ss]low%s+[Pp]artner%s+[Ss]erver') do
+        add_link(raw_url)
+    end
+
+    if #links == 0 then
+        for raw_url in html:gmatch('href="([^"]+)"') do
+            local lower = tostring(raw_url):lower()
+            if lower:find("/slow", 1, true)
+                or (lower:find("partner", 1, true) and lower:find("download", 1, true))
+                or lower:find("waitlist", 1, true) then
+                add_link(raw_url)
+            end
+        end
+    end
+
+    return links
+end
+
+local function parse_wait_seconds(html)
+    if type(html) ~= "string" or html == "" then
+        return nil
+    end
+
+    local raw_seconds = html:match("[Pp]lease%s+wait%s+(%d+)%s+seconds")
+        or html:match("wait%s+(%d+)%s+seconds%s+to%s+download")
+        or html:match("(%d+)%s+seconds%s+to%s+download")
+
+    local wait_seconds = tonumber(raw_seconds)
+    if wait_seconds and wait_seconds > 0 then
+        return wait_seconds
+    end
+
+    return nil
+end
+
+local function extract_copy_download_url(html)
+    if type(html) ~= "string" or html == "" then
+        return nil
+    end
+
+    local copied_url = html:match("copy(https?://[^%s<\"']+)")
+    if copied_url then
+        return normalize_extracted_url(copied_url)
+    end
+
+    for candidate in html:gmatch("https?://[^%s<\"']+") do
+        local normalized = normalize_extracted_url(candidate)
+        local lower = normalized:lower()
+        if lower:find("books-files", 1, true)
+            or lower:find("/redirection?", 1, true)
+            or lower:find("annas-arch-", 1, true) then
+            return normalized
+        end
+    end
+
+    return nil
+end
+
+local function attempt_file_download(download_url, filename, timeout, failures)
+    local file_status, file_data, file_detail = check_url(download_url, timeout)
+    if file_status ~= "success" then
+        record_failure(failures, file_status, file_detail, download_url)
+        logger.warn(string.format("Annas:scraper - File request failed on %s (%s)", download_url, tostring(file_status)))
+        return nil
+    end
+
+    if not file_data or file_data == "" then
+        record_failure(failures, "mirror_error", "Empty downloaded file", download_url)
+        logger.warn("Annas:scraper - Empty file response from " .. download_url)
+        return nil
+    end
+
+    if detect_anti_bot_response(file_data) then
+        record_failure(failures, "anti_bot", "Anti-bot response instead of file", download_url)
+        logger.warn("Annas:scraper - Anti-bot response instead of file from " .. download_url)
+        return nil
+    end
+
+    if looks_like_html(file_data) then
+        record_failure(failures, "mirror_error", "Mirror returned HTML instead of a file", download_url)
+        logger.warn("Annas:scraper - Mirror returned HTML instead of a file: " .. download_url)
+        return nil
+    end
+
+    local ok, save_err = save_file_bytes(filename, file_data)
+    if not ok then
+        logger.err("Annas:scraper - Failed to save downloaded file: " .. tostring(save_err))
+        return nil, T("Failed to save downloaded file.")
+    end
+
+    logger.info("Annas:scraper - Download finished: " .. filename)
+    return filename
+end
+
+local function try_lgli_download(book, filename, timeout, failures)
     local lgli_exts = {
         ".la/",
         ".gl/",
@@ -847,9 +1085,8 @@ function download_book(book, path)
         ".st/",
         ".bz/",
     }
+
     local preferred_source = Config.getPreferredSource()
-    local timeout = Config.getDownloadTimeout()
-    local failures = new_failure_stats()
 
     if preferred_source ~= "auto" then
         local preferred_ext = "." .. preferred_source .. "/"
@@ -861,19 +1098,6 @@ function download_book(book, path)
         end
         lgli_exts = reordered_exts
     end
-
-    if not book.download then
-        logger.warn("Annas:scraper - No download source available for book")
-        return nil, T("No supported download mirror is available for this book.")
-    end
-
-    if not string.find(book.download, "lgli", 1, true) then
-        logger.warn("Annas:scraper - Book is not available on a supported mirror: " .. tostring(book.download))
-        return nil, T("This book is not available from a supported download mirror yet.")
-    end
-
-    local filename = path .. "/" .. sanitize_name(book.title) .. "_" .. sanitize_name(book.author) .. "." .. tostring(book.format or "bin")
-    logger.info("Annas:scraper - Starting download for " .. tostring(book.title))
 
     for _, lgli_ext in ipairs(lgli_exts) do
         repeat
@@ -907,40 +1131,154 @@ function download_book(book, path)
             end
 
             local download_url = lgli_url .. download_link
-            local file_status, file_data, file_detail = check_url(download_url, timeout)
-            if file_status ~= "success" then
-                record_failure(failures, file_status, file_detail, download_url)
-                logger.warn(string.format("Annas:scraper - File request failed on %s (%s)", download_url, tostring(file_status)))
-                break
+            local downloaded_file, save_err = attempt_file_download(download_url, filename, timeout, failures)
+            if downloaded_file then
+                return downloaded_file
             end
 
-            if not file_data or file_data == "" then
-                record_failure(failures, "mirror_error", "Empty downloaded file", download_url)
-                logger.warn("Annas:scraper - Empty file response from " .. download_url)
-                break
+            if save_err then
+                return nil, save_err
             end
-
-            if detect_anti_bot_response(file_data) then
-                record_failure(failures, "anti_bot", "Anti-bot response instead of file", download_url)
-                logger.warn("Annas:scraper - Anti-bot response instead of file from " .. download_url)
-                break
-            end
-
-            if looks_like_html(file_data) then
-                record_failure(failures, "mirror_error", "Mirror returned HTML instead of a file", download_url)
-                logger.warn("Annas:scraper - Mirror returned HTML instead of a file: " .. download_url)
-                break
-            end
-
-            local ok, save_err = save_file_bytes(filename, file_data)
-            if not ok then
-                logger.err("Annas:scraper - Failed to save downloaded file: " .. tostring(save_err))
-                return nil, T("Failed to save downloaded file.")
-            end
-
-            logger.info("Annas:scraper - Download finished: " .. filename)
-            return filename
         until true
+    end
+
+    return nil
+end
+
+local function try_anna_slow_download(book, filename, timeout, failures)
+    local detail_url = tostring(book.link or "")
+    if detail_url == "" then
+        record_failure(failures, "mirror_error", "Missing Anna detail page URL", "annas")
+        return nil
+    end
+
+    local detail_status, detail_data, detail_detail = check_url(detail_url, timeout)
+    if detail_status ~= "success" then
+        record_failure(failures, detail_status, detail_detail, detail_url)
+        logger.warn(string.format("Annas:scraper - Anna detail page request failed on %s (%s)", detail_url, tostring(detail_status)))
+        return nil
+    end
+
+    if detect_anti_bot_response(detail_data) then
+        record_failure(failures, "anti_bot", "Anti-bot response on Anna detail page", detail_url)
+        logger.warn("Annas:scraper - Anti-bot response on Anna detail page: " .. detail_url)
+        return nil
+    end
+
+    local slow_links = extract_slow_partner_links(detail_data, detail_url)
+    if #slow_links == 0 then
+        record_failure(failures, "mirror_error", "No Anna slow partner links found", detail_url)
+        logger.warn("Annas:scraper - No Anna slow partner links found on detail page")
+        return nil
+    end
+
+    for _, slow_link in ipairs(slow_links) do
+        repeat
+            local page_status, page_data, page_detail = check_url(slow_link, timeout)
+            if page_status ~= "success" then
+                record_failure(failures, page_status, page_detail, slow_link)
+                logger.warn(string.format("Annas:scraper - Slow partner page request failed on %s (%s)", slow_link, tostring(page_status)))
+                break
+            end
+
+            if detect_anti_bot_response(page_data) then
+                record_failure(failures, "anti_bot", "Anti-bot response on Anna slow page", slow_link)
+                logger.warn("Annas:scraper - Anti-bot response on Anna slow page: " .. slow_link)
+                break
+            end
+
+            local direct_url = extract_copy_download_url(page_data)
+            if not direct_url then
+                local wait_seconds = parse_wait_seconds(page_data)
+                if wait_seconds and wait_seconds > 0 then
+                    local bounded_wait = math.min(wait_seconds + 1, 45)
+                    logger.info(string.format("Annas:scraper - Waiting %ds for Anna slow partner link", bounded_wait))
+                    sleep_seconds(bounded_wait)
+
+                    local waited_status, waited_data, waited_detail = check_url(slow_link, timeout)
+                    if waited_status ~= "success" then
+                        record_failure(failures, waited_status, waited_detail, slow_link)
+                        logger.warn(string.format("Annas:scraper - Slow partner page refresh failed on %s (%s)", slow_link, tostring(waited_status)))
+                        break
+                    end
+
+                    if detect_anti_bot_response(waited_data) then
+                        record_failure(failures, "anti_bot", "Anti-bot response after wait on Anna slow page", slow_link)
+                        logger.warn("Annas:scraper - Anti-bot response after wait on Anna slow page: " .. slow_link)
+                        break
+                    end
+
+                    direct_url = extract_copy_download_url(waited_data)
+                end
+            end
+
+            if not direct_url then
+                record_failure(failures, "mirror_error", "No final direct link found on Anna slow page", slow_link)
+                logger.warn("Annas:scraper - No final direct URL found on Anna slow page: " .. slow_link)
+                break
+            end
+
+            local downloaded_file, save_err = attempt_file_download(direct_url, filename, timeout, failures)
+            if downloaded_file then
+                return downloaded_file
+            end
+
+            if save_err then
+                return nil, save_err
+            end
+        until true
+    end
+
+    return nil
+end
+
+function download_book(book, path)
+    local timeout = Config.getDownloadTimeout()
+    local failures = new_failure_stats()
+    local providers = get_book_providers(book)
+
+    if #providers == 0 then
+        logger.warn("Annas:scraper - No supported provider key found for book")
+        return nil, T("No supported download mirror is available for this book.")
+    end
+
+    local has_lgli = false
+    local has_zlib = false
+    for _, provider_key in ipairs(providers) do
+        if provider_key == "lgli" then
+            has_lgli = true
+        elseif provider_key == "zlib" then
+            has_zlib = true
+        end
+    end
+
+    local filename = path .. "/" .. sanitize_name(book.title) .. "_" .. sanitize_name(book.author) .. "." .. tostring(book.format or "bin")
+    logger.info(string.format("Annas:scraper - Starting download for %s (providers: %s)", tostring(book.title), table.concat(providers, ", ")))
+
+    if has_lgli then
+        local downloaded_file, save_err = try_lgli_download(book, filename, timeout, failures)
+        if downloaded_file then
+            return downloaded_file
+        end
+
+        if save_err then
+            return nil, save_err
+        end
+    end
+
+    if has_zlib then
+        local downloaded_file, save_err = try_anna_slow_download(book, filename, timeout, failures)
+        if downloaded_file then
+            return downloaded_file
+        end
+
+        if save_err then
+            return nil, save_err
+        end
+    end
+
+    if has_zlib and not has_lgli and failures.mirror_error > 0 and failures.network_error == 0 then
+        return nil, T("Could not resolve a usable Anna slow-download link for this Z-Library item yet.")
     end
 
     local error_message = build_download_error_message(failures)
