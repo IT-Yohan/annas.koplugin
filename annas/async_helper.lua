@@ -13,19 +13,15 @@ function AsyncHelper.run(task_func, on_success, on_error, loading_msg_widget_to_
         end
 
         logger.dbg("AsyncHelper.run - Coroutine START")
-        local success, result = pcall(task_func, report_progress)
-        logger.dbg("AsyncHelper.run - Coroutine task_func finished. OK: %s", tostring(success))
-
-        if success then
-            return { ok = true, data = result }
-        else
-            return { ok = false, error = result }
-        end
+        local result = task_func(report_progress)
+        logger.dbg("AsyncHelper.run - Coroutine task_func finished.")
+        return { ok = true, data = result }
     end)
 
     local function close_loading_message()
         if loading_msg_widget_to_close then
             UIManager:close(loading_msg_widget_to_close)
+            UIManager:setDirty("all", "full")
             logger.dbg("AsyncHelper.run - Closed loading message widget.")
         end
     end

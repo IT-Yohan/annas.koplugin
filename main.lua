@@ -197,7 +197,6 @@ function Annas:downloadBook(book)
         local loading_title = T("Downloading, please wait …")
         local loading_msg = Ui.showLoadingMessage(loading_title)
         local last_progress_text = ""
-        local last_progress_update_at = 0
 
         local function update_progress_popup(progress_text)
             if type(progress_text) ~= "string" then
@@ -213,12 +212,6 @@ function Annas:downloadBook(book)
                 return
             end
             last_progress_text = trimmed
-
-            local now_clock = os.clock()
-            if now_clock - last_progress_update_at < 0.35 then
-                return
-            end
-            last_progress_update_at = now_clock
 
             loading_msg = Ui.updateLoadingMessage(loading_msg, loading_title .. " " .. trimmed)
         end
@@ -285,7 +278,6 @@ function Annas:downloadBook(book)
                 loading_msg = new_loading_msg
                 loading_title = T("Retrying download...")
                 last_progress_text = ""
-                last_progress_update_at = 0
                 AsyncHelper.run(task_download, on_success_download, on_error_download, loading_msg, update_progress_popup)
             end, function(final_err_msg)
                 -- Cancel callback - user already knows about the error

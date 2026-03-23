@@ -75,6 +75,9 @@ function DialogManager:closeAllDialogs()
     if closed_count > 0 or error_count > 0 or cleaned_invalid_count > 0 then
         logger.info(string.format("DialogManager: Dialog cleanup complete - Closed: %d, Errors: %d, Cleaned invalid: %d",
                                 closed_count, error_count, cleaned_invalid_count))
+        if closed_count > 0 then
+            UIManager:setDirty("all", "full")
+        end
     end
 end
 
@@ -104,6 +107,8 @@ function DialogManager:closeAndUntrackDialog(dialog)
 
     if not success then
         logger.warn("DialogManager: Failed to close dialog:", err)
+    else
+        UIManager:setDirty("all", "full")
     end
 
     self:untrackDialog(dialog)

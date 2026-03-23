@@ -197,12 +197,16 @@ function Ui.showErrorMessage(text)
 end
 
 function Ui.showLoadingMessage(text)
-    local message = InfoMessage:new{ text = text, timeout = 0 }
+    -- Use a long timeout instead of 0 because some runtimes treat 0 as immediate close.
+    local message = InfoMessage:new{ text = text, timeout = 3600 }
     if _plugin_instance and _plugin_instance.dialog_manager then
-        return _plugin_instance.dialog_manager:showAndTrackDialog(message)
+        local shown = _plugin_instance.dialog_manager:showAndTrackDialog(message)
+        UIManager:setDirty("all", "full")
+        return shown
     end
 
     UIManager:show(message)
+    UIManager:setDirty("all", "full")
     return message
 end
 
@@ -250,6 +254,7 @@ function Ui.closeMessage(message_widget)
     if message_widget then
         if _plugin_instance and _plugin_instance.dialog_manager then
             _plugin_instance.dialog_manager:closeAndUntrackDialog(message_widget)
+            UIManager:setDirty("all", "full")
             return
         end
 
