@@ -951,6 +951,16 @@ local function build_absolute_url(base_url, candidate_url)
     return base_dir .. normalized
 end
 
+local function iterate_href_values(html, callback)
+    for raw_url in html:gmatch('href%s*=%s*"([^"]+)"') do
+        callback(raw_url)
+    end
+
+    for raw_url in html:gmatch("href%s*=%s*'([^']+)'") do
+        callback(raw_url)
+    end
+end
+
 local function extract_slow_partner_links(html, base_url)
     if type(html) ~= "string" or html == "" then
         return {}
@@ -958,16 +968,10 @@ local function extract_slow_partner_links(html, base_url)
 
     local links = {}
     local seen = {}
-    local base_host = tostring(base_url):match("^https?://([^/]+)")
 
     local function add_link(raw_url)
         local absolute = build_absolute_url(base_url, raw_url)
         if not absolute then
-            return
-        end
-
-        local host = absolute:match("^https?://([^/]+)")
-        if base_host and host and host ~= base_host then
             return
         end
 
@@ -977,6 +981,13 @@ local function extract_slow_partner_links(html, base_url)
         end
     end
 
+    iterate_href_values(html, function(raw_url)
+        local lower = tostring(raw_url):lower()
+        if lower:find("/slow_download/", 1, true) then
+            add_link(raw_url)
+        end
+    end)
+
     for raw_url in html:gmatch('href="([^"]+)"[^>]->%s*[Ss]low%s+[Pp]artner%s+[Ss]erver') do
         add_link(raw_url)
     end
@@ -985,15 +996,64 @@ local function extract_slow_partner_links(html, base_url)
         add_link(raw_url)
     end
 
+    for raw_url in html:gmatch("href='([^']+)'[^>]->%s*[Ss]low%s+[Pp]artner%s+[Ss]erver") do
+        add_link(raw_url)
+    end
+
+    for raw_url in html:gmatch("href='([^']+)'.-[Ss]low%s+[Pp]artner%s+[Ss]erver") do
+        add_link(raw_url)
+    end
+
     if #links == 0 then
-        for raw_url in html:gmatch('href="([^"]+)"') do
+        iterate_href_values(html, function(raw_url)
             local lower = tostring(raw_url):lower()
             if lower:find("/slow", 1, true)
+                or lower:find("slow_partner", 1, true)
+                or lower:find("slow-partner", 1, true)
                 or (lower:find("partner", 1, true) and lower:find("download", 1, true))
                 or lower:find("waitlist", 1, true) then
                 add_link(raw_url)
             end
+        end)
+    end
+
+    return links
+end
+
+local function extract_partner_download_links(html, base_url)
+    if type(html) ~= "string" or html == "" then
+        return {}
+    end
+
+    local links = {}
+    local seen = {}
+
+    local function add_link(raw_url)
+        local absolute = build_absolute_url(base_url, raw_url)
+        if absolute and not seen[absolute] then
+            seen[absolute] = true
+            table.insert(links, absolute)
         end
+    end
+
+    for raw_url in html:gmatch('href="([^"]+)"[^>]->%s*[Dd]ownload%s+from%s+partner%s+website') do
+        add_link(raw_url)
+    end
+
+    for raw_url in html:gmatch("href='([^']+)'[^>]->%s*[Dd]ownload%s+from%s+partner%s+website") do
+        add_link(raw_url)
+    end
+
+    if #links == 0 then
+        iterate_href_values(html, function(raw_url)
+            local lower = tostring(raw_url):lower()
+            if (lower:find("partner", 1, true) and lower:find("download", 1, true))
+                or lower:find("download-from-partner", 1, true)
+                or lower:find("/slow", 1, true)
+                or lower:find("waitlist", 1, true) then
+                add_link(raw_url)
+            end
+        end)
     end
 
     return links
@@ -1004,9 +1064,29 @@ local function parse_wait_seconds(html)
         return nil
     end
 
-    local raw_seconds = html:match("[Pp]lease%s+wait%s+(%d+)%s+seconds")
-        or html:match("wait%s+(%d+)%s+seconds%s+to%s+download")
-        or html:match("(%d+)%s+seconds%s+to%s+download")
+    local js_wait_seconds = html:match("waitSeconds%s*=%s*(%d+)")
+    if js_wait_seconds then
+        local parsed_js_seconds = tonumber(js_wait_seconds)
+        if parsed_js_seconds and parsed_js_seconds > 0 then
+            return parsed_js_seconds
+        end
+    end
+
+    local dom_wait_seconds = html:match("js%-partner%-countdown[^>]*>%s*(%d+)%s*<")
+    if dom_wait_seconds then
+        local parsed_dom_seconds = tonumber(dom_wait_seconds)
+        if parsed_dom_seconds and parsed_dom_seconds > 0 then
+            return parsed_dom_seconds
+        end
+    end
+
+    local text_only = html:gsub("<[^>]+>", " ")
+    text_only = text_only:gsub("&nbsp;", " ")
+    text_only = text_only:gsub("%s+", " ")
+
+    local raw_seconds = text_only:match("[Pp]lease%s+wait%s+(%d+)%s+seconds")
+        or text_only:match("wait%s+(%d+)%s+seconds%s+to%s+download")
+        or text_only:match("(%d+)%s+seconds%s+to%s+download")
 
     local wait_seconds = tonumber(raw_seconds)
     if wait_seconds and wait_seconds > 0 then
@@ -1021,19 +1101,90 @@ local function extract_copy_download_url(html)
         return nil
     end
 
-    local copied_url = html:match("copy(https?://[^%s<\"']+)")
-    if copied_url then
-        return normalize_extracted_url(copied_url)
+    local candidates = {}
+    local seen = {}
+
+    local function push_candidate(url)
+        local normalized = normalize_extracted_url(url)
+        if normalized and normalized:match("^https?://") and not seen[normalized] then
+            seen[normalized] = true
+            table.insert(candidates, normalized)
+        end
+    end
+
+    local function score_candidate(url)
+        local lower = tostring(url):lower()
+        local score = 0
+
+        if lower:find("/slow_download/", 1, true) or lower:find("/fast_download/", 1, true) then
+            return -100
+        end
+
+        if lower:find("books-files", 1, true) then
+            score = score + 90
+        end
+        if lower:find("/redirection?", 1, true) then
+            score = score + 80
+        end
+        if lower:find("annas_archive_data__aacid", 1, true) then
+            score = score + 70
+        end
+        if lower:find("aacid__", 1, true) then
+            score = score + 45
+        end
+        if lower:find("annas-arch-", 1, true) then
+            score = score + 40
+        end
+        if lower:find("zlib3_files", 1, true) then
+            score = score + 30
+        end
+        if lower:find("filename=", 1, true) then
+            score = score + 25
+        end
+
+        if lower:match("%.epub([%?&].*)?$")
+            or lower:match("%.pdf([%?&].*)?$")
+            or lower:match("%.mobi([%?&].*)?$")
+            or lower:match("%.azw3?([%?&].*)?$")
+            or lower:match("%.fb2([%?&].*)?$")
+            or lower:match("%.djvu?([%?&].*)?$")
+            or lower:match("%.cbz([%?&].*)?$")
+            or lower:match("%.txt([%?&].*)?$") then
+            score = score + 35
+        end
+
+        if lower:find("/d", 1, true) and lower:find("/g", 1, true) then
+            score = score + 20
+        end
+
+        return score
+    end
+
+    for copied_url in html:gmatch("copy%s*(https?://[^%s<\"']+)") do
+        push_candidate(copied_url)
+    end
+
+    for copied_url in html:gmatch("writeText%s*%(%s*['\"](https?://[^'\"]+)['\"]%s*%)") do
+        push_candidate(copied_url)
     end
 
     for candidate in html:gmatch("https?://[^%s<\"']+") do
-        local normalized = normalize_extracted_url(candidate)
-        local lower = normalized:lower()
-        if lower:find("books-files", 1, true)
-            or lower:find("/redirection?", 1, true)
-            or lower:find("annas-arch-", 1, true) then
-            return normalized
+        push_candidate(candidate)
+    end
+
+    local best_url = nil
+    local best_score = -1000
+    for _, candidate in ipairs(candidates) do
+        local score = score_candidate(candidate)
+        if score > best_score then
+            best_score = score
+            best_url = candidate
         end
+    end
+
+    if best_url and best_score > 0 then
+        logger.info(string.format("Annas:scraper - Selected direct link candidate (score=%d): %s", best_score, best_url))
+        return best_url
     end
 
     return nil
@@ -1152,84 +1303,127 @@ local function try_anna_slow_download(book, filename, timeout, failures)
         return nil
     end
 
-    local detail_status, detail_data, detail_detail = check_url(detail_url, timeout)
-    if detail_status ~= "success" then
-        record_failure(failures, detail_status, detail_detail, detail_url)
-        logger.warn(string.format("Annas:scraper - Anna detail page request failed on %s (%s)", detail_url, tostring(detail_status)))
+    local seen_pages = {}
+
+    local function fetch_html_page(page_url, page_label)
+        local status, data, detail = check_url(page_url, timeout)
+        if status ~= "success" then
+            record_failure(failures, status, detail, page_url)
+            logger.warn(string.format("Annas:scraper - %s request failed on %s (%s)", page_label, page_url, tostring(status)))
+            return nil
+        end
+
+        if not data or data == "" then
+            record_failure(failures, "mirror_error", "Empty page response", page_url)
+            logger.warn("Annas:scraper - Empty page response from " .. page_url)
+            return nil
+        end
+
+        if detect_anti_bot_response(data) then
+            record_failure(failures, "anti_bot", "Anti-bot response on page", page_url)
+            logger.warn("Annas:scraper - Anti-bot response on page: " .. page_url)
+            return nil
+        end
+
+        return data
+    end
+
+    local function try_download_from_direct_link(direct_url)
+        if not direct_url then
+            return nil
+        end
+
+        local downloaded_file, save_err = attempt_file_download(direct_url, filename, timeout, failures)
+        if downloaded_file then
+            return downloaded_file
+        end
+
+        if save_err then
+            return nil, save_err
+        end
+
         return nil
     end
 
-    if detect_anti_bot_response(detail_data) then
-        record_failure(failures, "anti_bot", "Anti-bot response on Anna detail page", detail_url)
-        logger.warn("Annas:scraper - Anti-bot response on Anna detail page: " .. detail_url)
-        return nil
-    end
+    local function try_slow_link_page(slow_link)
+        if seen_pages[slow_link] then
+            return nil
+        end
+        seen_pages[slow_link] = true
 
-    local slow_links = extract_slow_partner_links(detail_data, detail_url)
-    if #slow_links == 0 then
-        record_failure(failures, "mirror_error", "No Anna slow partner links found", detail_url)
-        logger.warn("Annas:scraper - No Anna slow partner links found on detail page")
-        return nil
-    end
+        local page_data = fetch_html_page(slow_link, "Slow partner page")
+        if not page_data then
+            return nil
+        end
 
-    for _, slow_link in ipairs(slow_links) do
-        repeat
-            local page_status, page_data, page_detail = check_url(slow_link, timeout)
-            if page_status ~= "success" then
-                record_failure(failures, page_status, page_detail, slow_link)
-                logger.warn(string.format("Annas:scraper - Slow partner page request failed on %s (%s)", slow_link, tostring(page_status)))
-                break
-            end
+        local direct_url = extract_copy_download_url(page_data)
+        local downloaded_file, save_err = try_download_from_direct_link(direct_url)
+        if downloaded_file or save_err then
+            return downloaded_file, save_err
+        end
 
-            if detect_anti_bot_response(page_data) then
-                record_failure(failures, "anti_bot", "Anti-bot response on Anna slow page", slow_link)
-                logger.warn("Annas:scraper - Anti-bot response on Anna slow page: " .. slow_link)
-                break
-            end
+        local wait_seconds = parse_wait_seconds(page_data)
+        if wait_seconds and wait_seconds > 0 then
+            local bounded_wait = math.min(wait_seconds + 1, 45)
+            logger.info(string.format("Annas:scraper - Waiting %ds for Anna slow partner link", bounded_wait))
+            sleep_seconds(bounded_wait)
 
-            local direct_url = extract_copy_download_url(page_data)
-            if not direct_url then
-                local wait_seconds = parse_wait_seconds(page_data)
-                if wait_seconds and wait_seconds > 0 then
-                    local bounded_wait = math.min(wait_seconds + 1, 45)
-                    logger.info(string.format("Annas:scraper - Waiting %ds for Anna slow partner link", bounded_wait))
-                    sleep_seconds(bounded_wait)
-
-                    local waited_status, waited_data, waited_detail = check_url(slow_link, timeout)
-                    if waited_status ~= "success" then
-                        record_failure(failures, waited_status, waited_detail, slow_link)
-                        logger.warn(string.format("Annas:scraper - Slow partner page refresh failed on %s (%s)", slow_link, tostring(waited_status)))
-                        break
-                    end
-
-                    if detect_anti_bot_response(waited_data) then
-                        record_failure(failures, "anti_bot", "Anti-bot response after wait on Anna slow page", slow_link)
-                        logger.warn("Annas:scraper - Anti-bot response after wait on Anna slow page: " .. slow_link)
-                        break
-                    end
-
-                    direct_url = extract_copy_download_url(waited_data)
+            local waited_data = fetch_html_page(slow_link, "Slow partner page refresh")
+            if waited_data then
+                local waited_direct_url = extract_copy_download_url(waited_data)
+                downloaded_file, save_err = try_download_from_direct_link(waited_direct_url)
+                if downloaded_file or save_err then
+                    return downloaded_file, save_err
                 end
             end
+        end
 
-            if not direct_url then
-                record_failure(failures, "mirror_error", "No final direct link found on Anna slow page", slow_link)
-                logger.warn("Annas:scraper - No final direct URL found on Anna slow page: " .. slow_link)
-                break
-            end
-
-            local downloaded_file, save_err = attempt_file_download(direct_url, filename, timeout, failures)
-            if downloaded_file then
-                return downloaded_file
-            end
-
-            if save_err then
-                return nil, save_err
-            end
-        until true
+        record_failure(failures, "mirror_error", "No final direct link found on Anna slow page", slow_link)
+        logger.warn("Annas:scraper - No final direct URL found on Anna slow page: " .. slow_link)
+        return nil
     end
 
-    return nil
+    local function try_page(page_url, allow_partner_hop)
+        if seen_pages[page_url] then
+            return nil
+        end
+        seen_pages[page_url] = true
+
+        local page_data = fetch_html_page(page_url, "Anna page")
+        if not page_data then
+            return nil
+        end
+
+        local direct_url = extract_copy_download_url(page_data)
+        local downloaded_file, save_err = try_download_from_direct_link(direct_url)
+        if downloaded_file or save_err then
+            return downloaded_file, save_err
+        end
+
+        local slow_links = extract_slow_partner_links(page_data, page_url)
+        logger.info(string.format("Annas:scraper - Found %d slow-link candidates on %s", #slow_links, page_url))
+        for _, slow_link in ipairs(slow_links) do
+            downloaded_file, save_err = try_slow_link_page(slow_link)
+            if downloaded_file or save_err then
+                return downloaded_file, save_err
+            end
+        end
+
+        if allow_partner_hop then
+            local partner_links = extract_partner_download_links(page_data, page_url)
+            logger.info(string.format("Annas:scraper - Found %d partner-page candidates on %s", #partner_links, page_url))
+            for _, partner_link in ipairs(partner_links) do
+                downloaded_file, save_err = try_page(partner_link, false)
+                if downloaded_file or save_err then
+                    return downloaded_file, save_err
+                end
+            end
+        end
+
+        return nil
+    end
+
+    return try_page(detail_url, true)
 end
 
 function download_book(book, path)
@@ -1278,7 +1472,7 @@ function download_book(book, path)
     end
 
     if has_zlib and not has_lgli and failures.mirror_error > 0 and failures.network_error == 0 then
-        return nil, T("Could not resolve a usable Anna slow-download link for this Z-Library item yet.")
+        return nil, T("Could not resolve a usable Anna slow-download link for this Z-Library item. Try opening the Anna page in a browser first, then retry.")
     end
 
     local error_message = build_download_error_message(failures)
